@@ -19,10 +19,63 @@ static constexpr uint8_t MAX_MULTI_READ_RETRIES = 6;
 static constexpr uint8_t MAX_SINGLE_READ_RETRIES = 12;
 static constexpr uint16_t ISO15693_READ_BUFFER_BYTES = 1024;
 static constexpr uint8_t MAX_ISO14443A_READ_COMMANDS = 64;
+static constexpr uint8_t PN5180_WRITE_REGISTER_SAFE = 0x00;
+static constexpr uint8_t PN5180_WRITE_REGISTER_OR_MASK_SAFE = 0x01;
+static constexpr uint8_t PN5180_WRITE_REGISTER_AND_MASK_SAFE = 0x02;
+static constexpr uint8_t PN5180_READ_REGISTER_SAFE = 0x04;
+static constexpr uint8_t PN5180_SEND_DATA_SAFE = 0x09;
+static constexpr uint8_t PN5180_READ_DATA_SAFE = 0x0A;
+static constexpr uint8_t PN5180_LOAD_RF_CONFIG_SAFE = 0x11;
+static constexpr uint8_t PN5180_RF_ON_SAFE = 0x16;
+static constexpr uint8_t PN5180_MIFARE_AUTHENTICATE = 0x0C;
+static constexpr uint8_t MIFARE_KEY_A = 0x60;
+static constexpr uint8_t MIFARE_KEY_B = 0x61;
+static constexpr uint16_t MIFARE_CLASSIC_MAX_BLOCKS = 256;
+static constexpr uint8_t MIFARE_CLASSIC_BLOCK_SIZE = 16;
+static constexpr uint32_t PN5180_BUSY_TIMEOUT_MS = 40;
+static constexpr uint32_t PN5180_RESET_TIMEOUT_MS = 250;
+static constexpr uint32_t PN5180_RF_ON_TIMEOUT_MS = 250;
+static constexpr uint32_t MIFARE_CLASSIC_READ_TIMEOUT_MS = 45;
 
 PN5180ISO15693 nfc15693(PN5180_NSS_PIN, PN5180_BUSY_PIN, PN5180_RST_PIN);
 PN5180ISO14443 nfc14443(PN5180_NSS_PIN, PN5180_BUSY_PIN, PN5180_RST_PIN);
 PN5180FeliCa nfcFeliCa(PN5180_NSS_PIN, PN5180_BUSY_PIN, PN5180_RST_PIN);
+SPISettings pn5180DirectSpiSettings(7000000, MSBFIRST, SPI_MODE0);
+uint8_t lastMifareAuthStatus = 0xFF;
+
+static const uint8_t MIFARE_CLASSIC_KEYS[][6] = {
+  {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},
+  {0xA0, 0xB0, 0xC0, 0xD0, 0xE0, 0xF0},
+  {0xA1, 0xB1, 0xC1, 0xD1, 0xE1, 0xF1},
+  {0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5},
+  {0xB0, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5},
+  {0x4D, 0x3A, 0x99, 0xC3, 0x51, 0xDD},
+  {0x1A, 0x98, 0x2C, 0x7E, 0x45, 0x9A},
+  {0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+  {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF},
+  {0xD3, 0xF7, 0xD3, 0xF7, 0xD3, 0xF7},
+  {0x71, 0x4C, 0x5C, 0x88, 0x6E, 0x97},
+  {0x58, 0x7E, 0xE5, 0xF9, 0x35, 0x0F},
+  {0xA0, 0x47, 0x8C, 0xC3, 0x90, 0x91},
+  {0x53, 0x3C, 0xB6, 0xC7, 0x23, 0xF6},
+  {0x8F, 0xD0, 0xA4, 0xF2, 0x56, 0xE9},
+};
+static constexpr uint8_t MIFARE_CLASSIC_KEY_COUNT = sizeof(MIFARE_CLASSIC_KEYS) / sizeof(MIFARE_CLASSIC_KEYS[0]);
+
+struct MifareClassicDumpResult {
+  uint16_t blockCount = 0;
+  uint16_t blocksRead = 0;
+  uint8_t sectorCount = 0;
+  uint8_t sectorsAuthenticated = 0;
+};
+
+bool pn5180WriteRegisterWithAndMaskSafe(uint8_t reg, uint32_t mask);
+bool pn5180WriteRegisterWithOrMaskSafe(uint8_t reg, uint32_t mask);
+bool pn5180ClearIRQStatusSafe(uint32_t irqMask);
+bool pn5180LoadRfConfigSafe(uint8_t txConf, uint8_t rxConf);
+bool pn5180TransceiveRfSafe(const uint8_t *command, uint8_t commandLen, uint8_t validBits, uint8_t expectedLen, uint8_t *response, uint32_t timeoutMs);
+bool setupRfSafe(uint8_t txConf, uint8_t rxConf, bool startTransceive, const __FlashStringHelper *protocolName);
+uint8_t activateTypeASafe(uint8_t *buffer, uint8_t kind);
 
 struct SystemInfoData {
   ISO15693ErrorCode rc = ISO15693_EC_UNKNOWN_ERROR;
@@ -75,6 +128,63 @@ void printHexLine(const uint8_t *data, uint8_t len) {
     }
   }
   Serial.println();
+}
+
+void printMifareKey(const uint8_t key[6]) {
+  for (uint8_t i = 0; i < 6; ++i) {
+    printHexByte(key[i]);
+  }
+}
+
+bool waitPn5180BusyState(uint8_t expectedState, uint32_t timeoutMs) {
+  uint32_t startedAt = millis();
+  while (digitalRead(PN5180_BUSY_PIN) != expectedState) {
+    if ((millis() - startedAt) > timeoutMs) {
+      return false;
+    }
+    delayMicroseconds(50);
+  }
+  return true;
+}
+
+bool pn5180DirectCommand(uint8_t *sendBuffer, size_t sendBufferLen, uint8_t *recvBuffer = nullptr, size_t recvBufferLen = 0) {
+  bool ok = true;
+
+  SPI.beginTransaction(pn5180DirectSpiSettings);
+
+  ok = waitPn5180BusyState(LOW, PN5180_BUSY_TIMEOUT_MS);
+  if (ok) {
+    digitalWrite(PN5180_NSS_PIN, LOW);
+    delay(2);
+    for (size_t i = 0; i < sendBufferLen; ++i) {
+      SPI.transfer(sendBuffer[i]);
+    }
+    ok = waitPn5180BusyState(HIGH, PN5180_BUSY_TIMEOUT_MS);
+    digitalWrite(PN5180_NSS_PIN, HIGH);
+    delay(1);
+  }
+
+  if (ok) {
+    ok = waitPn5180BusyState(LOW, PN5180_BUSY_TIMEOUT_MS);
+  }
+
+  if (ok && recvBuffer != nullptr && recvBufferLen > 0) {
+    digitalWrite(PN5180_NSS_PIN, LOW);
+    delay(2);
+    for (size_t i = 0; i < recvBufferLen; ++i) {
+      recvBuffer[i] = SPI.transfer(0xFF);
+    }
+    ok = waitPn5180BusyState(HIGH, PN5180_BUSY_TIMEOUT_MS);
+    digitalWrite(PN5180_NSS_PIN, HIGH);
+    delay(1);
+    if (ok) {
+      ok = waitPn5180BusyState(LOW, PN5180_BUSY_TIMEOUT_MS);
+    }
+  }
+
+  digitalWrite(PN5180_NSS_PIN, HIGH);
+  SPI.endTransaction();
+  return ok;
 }
 
 void printErrorText(ISO15693ErrorCode rc) {
@@ -439,6 +549,456 @@ uint16_t mifareClassicBlockCount(uint8_t sak) {
   }
 }
 
+uint8_t mifareClassicSectorCount(uint8_t sak) {
+  switch (sak) {
+    case 0x09:
+      return 5;
+    case 0x18:
+      return 40;
+    case 0x08:
+    default:
+      return 16;
+  }
+}
+
+uint16_t mifareClassicSectorFirstBlock(uint8_t sector) {
+  if (sector < 32) {
+    return static_cast<uint16_t>(sector) * 4;
+  }
+  return static_cast<uint16_t>(128 + (sector - 32) * 16);
+}
+
+uint8_t mifareClassicSectorBlockCount(uint8_t sector) {
+  return sector < 32 ? 4 : 16;
+}
+
+uint8_t activateTypeASafe(uint8_t *buffer, uint8_t kind) {
+  uint8_t cmd[7] = {0};
+
+  if (!pn5180LoadRfConfigSafe(0x00, 0x80)) {
+    return 0;
+  }
+  if (!pn5180WriteRegisterWithAndMaskSafe(SYSTEM_CONFIG, 0xFFFFFFBF)) {
+    return 0;
+  }
+  if (!pn5180WriteRegisterWithAndMaskSafe(CRC_RX_CONFIG, 0xFFFFFFFE)) {
+    return 0;
+  }
+  if (!pn5180WriteRegisterWithAndMaskSafe(CRC_TX_CONFIG, 0xFFFFFFFE)) {
+    return 0;
+  }
+
+  cmd[0] = kind == 0 ? 0x26 : 0x52;
+  if (!pn5180TransceiveRfSafe(cmd, 1, 0x07, 2, buffer, 30)) {
+    return 0;
+  }
+
+  cmd[0] = 0x93;
+  cmd[1] = 0x20;
+  if (!pn5180TransceiveRfSafe(cmd, 2, 0x00, 5, cmd + 2, 35)) {
+    return 0;
+  }
+
+  if (!pn5180WriteRegisterWithOrMaskSafe(CRC_RX_CONFIG, 0x01)) {
+    return 0;
+  }
+  if (!pn5180WriteRegisterWithOrMaskSafe(CRC_TX_CONFIG, 0x01)) {
+    return 0;
+  }
+
+  cmd[0] = 0x93;
+  cmd[1] = 0x70;
+  if (!pn5180TransceiveRfSafe(cmd, 7, 0x00, 1, buffer + 2, 35)) {
+    return 0;
+  }
+
+  if ((buffer[2] & 0x04) == 0) {
+    for (uint8_t i = 0; i < 4; ++i) {
+      buffer[3 + i] = cmd[2 + i];
+    }
+    return 4;
+  }
+
+  if (cmd[2] != 0x88) {
+    return 0;
+  }
+  for (uint8_t i = 0; i < 3; ++i) {
+    buffer[3 + i] = cmd[3 + i];
+  }
+
+  if (!pn5180WriteRegisterWithAndMaskSafe(CRC_RX_CONFIG, 0xFFFFFFFE)) {
+    return 0;
+  }
+  if (!pn5180WriteRegisterWithAndMaskSafe(CRC_TX_CONFIG, 0xFFFFFFFE)) {
+    return 0;
+  }
+
+  cmd[0] = 0x95;
+  cmd[1] = 0x20;
+  if (!pn5180TransceiveRfSafe(cmd, 2, 0x00, 5, cmd + 2, 35)) {
+    return 0;
+  }
+  for (uint8_t i = 0; i < 4; ++i) {
+    buffer[6 + i] = cmd[2 + i];
+  }
+
+  if (!pn5180WriteRegisterWithOrMaskSafe(CRC_RX_CONFIG, 0x01)) {
+    return 0;
+  }
+  if (!pn5180WriteRegisterWithOrMaskSafe(CRC_TX_CONFIG, 0x01)) {
+    return 0;
+  }
+
+  cmd[0] = 0x95;
+  cmd[1] = 0x70;
+  if (!pn5180TransceiveRfSafe(cmd, 7, 0x00, 1, buffer + 2, 35)) {
+    return 0;
+  }
+
+  return 7;
+}
+
+bool reselectIso14443A(const uint8_t *expectedUid, uint8_t expectedUidLength, uint8_t &sak) {
+  if (!setupRfSafe(0x00, 0x80, false, F("ISO14443A"))) {
+    return false;
+  }
+
+  uint8_t response[10] = {0};
+  uint8_t uidLength = activateTypeASafe(response, 1);
+  if (uidLength != expectedUidLength) {
+    return false;
+  }
+
+  for (uint8_t i = 0; i < uidLength; ++i) {
+    if (response[3 + i] != expectedUid[i]) {
+      return false;
+    }
+  }
+
+  sak = response[2];
+  return true;
+}
+
+bool mifareClassicAuthenticate(uint8_t blockAddress, uint8_t keyType, const uint8_t key[6], const uint8_t uid[4]) {
+  uint8_t command[13] = {
+    PN5180_MIFARE_AUTHENTICATE,
+    key[0], key[1], key[2], key[3], key[4], key[5],
+    keyType,
+    blockAddress,
+    uid[0], uid[1], uid[2], uid[3],
+  };
+  uint8_t response[1] = {0xFF};
+
+  lastMifareAuthStatus = 0xFE;
+  pn5180ClearIRQStatusSafe(0xFFFFFFFF);
+  if (!pn5180DirectCommand(command, sizeof(command), response, sizeof(response))) {
+    lastMifareAuthStatus = 0xFD;
+    return false;
+  }
+  lastMifareAuthStatus = response[0];
+  return response[0] == 0x00;
+}
+
+void encodeUint32Le(uint32_t value, uint8_t *buffer) {
+  buffer[0] = static_cast<uint8_t>(value & 0xFF);
+  buffer[1] = static_cast<uint8_t>((value >> 8) & 0xFF);
+  buffer[2] = static_cast<uint8_t>((value >> 16) & 0xFF);
+  buffer[3] = static_cast<uint8_t>((value >> 24) & 0xFF);
+}
+
+uint32_t decodeUint32Le(const uint8_t *buffer) {
+  return static_cast<uint32_t>(buffer[0])
+      | (static_cast<uint32_t>(buffer[1]) << 8)
+      | (static_cast<uint32_t>(buffer[2]) << 16)
+      | (static_cast<uint32_t>(buffer[3]) << 24);
+}
+
+bool pn5180WriteRegisterSafe(uint8_t reg, uint32_t value) {
+  uint8_t command[6] = {PN5180_WRITE_REGISTER_SAFE, reg, 0, 0, 0, 0};
+  encodeUint32Le(value, &command[2]);
+  return pn5180DirectCommand(command, sizeof(command));
+}
+
+bool pn5180WriteRegisterWithAndMaskSafe(uint8_t reg, uint32_t mask) {
+  uint8_t command[6] = {PN5180_WRITE_REGISTER_AND_MASK_SAFE, reg, 0, 0, 0, 0};
+  encodeUint32Le(mask, &command[2]);
+  return pn5180DirectCommand(command, sizeof(command));
+}
+
+bool pn5180WriteRegisterWithOrMaskSafe(uint8_t reg, uint32_t mask) {
+  uint8_t command[6] = {PN5180_WRITE_REGISTER_OR_MASK_SAFE, reg, 0, 0, 0, 0};
+  encodeUint32Le(mask, &command[2]);
+  return pn5180DirectCommand(command, sizeof(command));
+}
+
+bool pn5180ReadRegisterSafe(uint8_t reg, uint32_t *value) {
+  uint8_t command[2] = {PN5180_READ_REGISTER_SAFE, reg};
+  uint8_t response[4] = {0};
+  if (!pn5180DirectCommand(command, sizeof(command), response, sizeof(response))) {
+    return false;
+  }
+  *value = decodeUint32Le(response);
+  return true;
+}
+
+bool pn5180ClearIRQStatusSafe(uint32_t irqMask) {
+  return pn5180WriteRegisterSafe(IRQ_CLEAR, irqMask);
+}
+
+bool pn5180GetIRQStatusSafe(uint32_t *irqStatus) {
+  return pn5180ReadRegisterSafe(IRQ_STATUS, irqStatus);
+}
+
+bool pn5180ResetSafe() {
+  digitalWrite(PN5180_RST_PIN, LOW);
+  delay(10);
+  digitalWrite(PN5180_RST_PIN, HIGH);
+  delay(10);
+
+  uint32_t startedAt = millis();
+  uint32_t irqStatus = 0;
+  while (true) {
+    if (pn5180GetIRQStatusSafe(&irqStatus) && (irqStatus & IDLE_IRQ_STAT)) {
+      pn5180ClearIRQStatusSafe(0xFFFFFFFF);
+      return true;
+    }
+    if ((millis() - startedAt) > PN5180_RESET_TIMEOUT_MS) {
+      return false;
+    }
+    delay(2);
+  }
+}
+
+bool pn5180LoadRfConfigSafe(uint8_t txConf, uint8_t rxConf) {
+  uint8_t command[3] = {PN5180_LOAD_RF_CONFIG_SAFE, txConf, rxConf};
+  return pn5180DirectCommand(command, sizeof(command));
+}
+
+bool pn5180RfOnSafe() {
+  uint8_t command[2] = {PN5180_RF_ON_SAFE, 0x00};
+  if (!pn5180DirectCommand(command, sizeof(command))) {
+    return false;
+  }
+
+  uint32_t startedAt = millis();
+  uint32_t irqStatus = 0;
+  while (true) {
+    if (pn5180GetIRQStatusSafe(&irqStatus) && (irqStatus & TX_RFON_IRQ_STAT)) {
+      pn5180ClearIRQStatusSafe(TX_RFON_IRQ_STAT);
+      return true;
+    }
+    if ((millis() - startedAt) > PN5180_RF_ON_TIMEOUT_MS) {
+      return false;
+    }
+    delay(2);
+  }
+}
+
+bool setupRfSafe(uint8_t txConf, uint8_t rxConf, bool startTransceive, const __FlashStringHelper *protocolName) {
+  if (!pn5180ResetSafe()) {
+    Serial.print(F("INFO rf_reset_failed protocol="));
+    Serial.println(protocolName);
+    return false;
+  }
+  if (!pn5180LoadRfConfigSafe(txConf, rxConf)) {
+    Serial.print(F("INFO rf_config_failed protocol="));
+    Serial.println(protocolName);
+    return false;
+  }
+  if (!pn5180RfOnSafe()) {
+    Serial.print(F("INFO rf_on_failed protocol="));
+    Serial.println(protocolName);
+    return false;
+  }
+  if (startTransceive) {
+    if (!pn5180WriteRegisterWithAndMaskSafe(SYSTEM_CONFIG, 0xFFFFFFF8)) {
+      return false;
+    }
+    if (!pn5180WriteRegisterWithOrMaskSafe(SYSTEM_CONFIG, 0x00000003)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool pn5180SendRfDataSafe(const uint8_t *data, uint8_t len, uint8_t validBits = 0) {
+  if (len > 18) {
+    return false;
+  }
+
+  uint8_t command[20] = {0};
+  command[0] = PN5180_SEND_DATA_SAFE;
+  command[1] = validBits;
+  for (uint8_t i = 0; i < len; ++i) {
+    command[2 + i] = data[i];
+  }
+
+  if (!pn5180WriteRegisterWithAndMaskSafe(SYSTEM_CONFIG, 0xFFFFFFF8)) {
+    return false;
+  }
+  if (!pn5180WriteRegisterWithOrMaskSafe(SYSTEM_CONFIG, 0x00000003)) {
+    return false;
+  }
+  return pn5180DirectCommand(command, static_cast<size_t>(len) + 2);
+}
+
+bool pn5180ReadRfDataSafe(uint8_t len, uint8_t *buffer) {
+  uint8_t command[2] = {PN5180_READ_DATA_SAFE, 0x00};
+  return pn5180DirectCommand(command, sizeof(command), buffer, len);
+}
+
+bool pn5180WaitForRx(uint8_t expectedLen, uint32_t timeoutMs) {
+  uint32_t startedAt = millis();
+  uint32_t irqStatus = 0;
+  while (true) {
+    if (!pn5180GetIRQStatusSafe(&irqStatus)) {
+      return false;
+    }
+    if (irqStatus & RX_IRQ_STAT) {
+      break;
+    }
+    if ((millis() - startedAt) > timeoutMs) {
+      pn5180WriteRegisterWithAndMaskSafe(SYSTEM_CONFIG, 0xFFFFFFF8);
+      return false;
+    }
+    delay(1);
+  }
+
+  uint32_t rxStatus = 0;
+  if (!pn5180ReadRegisterSafe(RX_STATUS, &rxStatus)) {
+    return false;
+  }
+  return static_cast<uint16_t>(rxStatus & 0x000001FF) == expectedLen;
+}
+
+bool pn5180TransceiveRfSafe(const uint8_t *command, uint8_t commandLen, uint8_t validBits, uint8_t expectedLen, uint8_t *response, uint32_t timeoutMs) {
+  pn5180ClearIRQStatusSafe(0xFFFFFFFF);
+  if (!pn5180SendRfDataSafe(command, commandLen, validBits)) {
+    return false;
+  }
+  if (!pn5180WaitForRx(expectedLen, timeoutMs)) {
+    return false;
+  }
+  return pn5180ReadRfDataSafe(expectedLen, response);
+}
+
+bool mifareClassicReadBlockSafe(uint8_t blockAddress, uint8_t *buffer) {
+  uint8_t command[2] = {0x30, blockAddress};
+  return pn5180TransceiveRfSafe(command, sizeof(command), 0, MIFARE_CLASSIC_BLOCK_SIZE, buffer, MIFARE_CLASSIC_READ_TIMEOUT_MS);
+}
+
+void mifareHaltSafe() {
+  uint8_t command[2] = {0x50, 0x00};
+  pn5180SendRfDataSafe(command, sizeof(command));
+  pn5180WriteRegisterWithAndMaskSafe(SYSTEM_CONFIG, 0xFFFFFFF8);
+}
+
+MifareClassicDumpResult readMifareClassicWithDictionary(
+    uint8_t *uid,
+    uint8_t uidLength,
+    uint8_t sak,
+    uint8_t dump[MIFARE_CLASSIC_MAX_BLOCKS][MIFARE_CLASSIC_BLOCK_SIZE],
+    bool blockRead[MIFARE_CLASSIC_MAX_BLOCKS]) {
+  MifareClassicDumpResult result;
+  result.blockCount = mifareClassicBlockCount(sak);
+  result.sectorCount = mifareClassicSectorCount(sak);
+
+  for (uint16_t block = 0; block < MIFARE_CLASSIC_MAX_BLOCKS; ++block) {
+    blockRead[block] = false;
+    for (uint8_t i = 0; i < MIFARE_CLASSIC_BLOCK_SIZE; ++i) {
+      dump[block][i] = 0;
+    }
+  }
+
+  if (uidLength != 4) {
+    Serial.println(F("INFO mfclassic_auth status=unsupported_uid_length"));
+    return result;
+  }
+
+  Serial.print(F("INFO mfclassic_dump_start sectors="));
+  Serial.print(result.sectorCount);
+  Serial.print(F(" keys="));
+  Serial.println(MIFARE_CLASSIC_KEY_COUNT);
+
+  uint8_t activeSak = sak;
+  for (uint8_t sector = 0; sector < result.sectorCount; ++sector) {
+    uint16_t firstBlock = mifareClassicSectorFirstBlock(sector);
+    uint8_t sectorBlocks = mifareClassicSectorBlockCount(sector);
+    bool authenticated = false;
+    uint8_t authenticatedKeyType = 0;
+    uint8_t authenticatedKeyIndex = 0;
+
+    for (uint8_t keyTypeIndex = 0; keyTypeIndex < 2 && !authenticated; ++keyTypeIndex) {
+      uint8_t keyType = keyTypeIndex == 0 ? MIFARE_KEY_A : MIFARE_KEY_B;
+      for (uint8_t keyIndex = 0; keyIndex < MIFARE_CLASSIC_KEY_COUNT && !authenticated; ++keyIndex) {
+        if (mifareClassicAuthenticate(static_cast<uint8_t>(firstBlock), keyType, MIFARE_CLASSIC_KEYS[keyIndex], uid)) {
+          authenticated = true;
+          authenticatedKeyType = keyType;
+          authenticatedKeyIndex = keyIndex;
+          break;
+        }
+
+        delay(4);
+        reselectIso14443A(uid, uidLength, activeSak);
+      }
+    }
+
+    if (!authenticated) {
+      Serial.print(F("INFO mfclassic_auth sector="));
+      Serial.print(sector);
+      Serial.print(F(" status=failed last_status="));
+      printHexByte(lastMifareAuthStatus);
+      Serial.println();
+      reselectIso14443A(uid, uidLength, activeSak);
+      continue;
+    }
+
+    ++result.sectorsAuthenticated;
+    Serial.print(F("INFO mfclassic_auth sector="));
+    Serial.print(sector);
+    Serial.print(F(" key_type="));
+    Serial.print(authenticatedKeyType == MIFARE_KEY_A ? 'A' : 'B');
+    Serial.print(F(" key_index="));
+    Serial.print(authenticatedKeyIndex);
+    Serial.print(F(" key="));
+    printMifareKey(MIFARE_CLASSIC_KEYS[authenticatedKeyIndex]);
+    Serial.println(F(" status=ok"));
+
+    for (uint8_t offset = 0; offset < sectorBlocks; ++offset) {
+      uint16_t block = firstBlock + offset;
+      if (block >= result.blockCount) {
+        break;
+      }
+
+      uint8_t buffer[MIFARE_CLASSIC_BLOCK_SIZE] = {0};
+      bool blockOk = false;
+      for (uint8_t attempt = 0; attempt < 2 && !blockOk; ++attempt) {
+        if (offset > 0 || attempt > 0) {
+          reselectIso14443A(uid, uidLength, activeSak);
+          mifareClassicAuthenticate(static_cast<uint8_t>(block), authenticatedKeyType, MIFARE_CLASSIC_KEYS[authenticatedKeyIndex], uid);
+        }
+        blockOk = mifareClassicReadBlockSafe(static_cast<uint8_t>(block), buffer);
+      }
+
+      if (blockOk) {
+        for (uint8_t i = 0; i < MIFARE_CLASSIC_BLOCK_SIZE; ++i) {
+          dump[block][i] = buffer[i];
+        }
+        blockRead[block] = true;
+        ++result.blocksRead;
+      } else {
+        Serial.print(F("INFO mfclassic_read_failed block="));
+        Serial.println(block);
+      }
+    }
+
+    delay(4);
+    reselectIso14443A(uid, uidLength, activeSak);
+  }
+
+  return result;
+}
+
 uint8_t iso14443AReadStep(uint8_t sak) {
   // Ultralight/NTAG READ returns four 4-byte pages at once. Other Type A tags
   // usually expose 16-byte blocks or require protocol-specific/authenticated IO.
@@ -447,7 +1007,7 @@ uint8_t iso14443AReadStep(uint8_t sak) {
 
 bool dumpIso15693IfPresent() {
   uint8_t uid[8] = {0};
-  if (!setupRf(nfc15693, F("ISO15693"))) {
+  if (!setupRfSafe(0x0D, 0x8D, true, F("ISO15693"))) {
     return false;
   }
 
@@ -510,7 +1070,7 @@ bool dumpIso15693IfPresent() {
 }
 
 bool dumpIso14443AIfPresent() {
-  if (!setupRf(nfc14443, F("ISO14443A"))) {
+  if (!setupRfSafe(0x00, 0x80, false, F("ISO14443A"))) {
     return false;
   }
 
@@ -533,8 +1093,13 @@ bool dumpIso14443AIfPresent() {
   uint8_t readAddresses[MAX_ISO14443A_READ_COMMANDS] = {0};
   uint8_t readCount = 0;
   const bool authRequired = isMifareClassicSak(sak);
+  static uint8_t classicDump[MIFARE_CLASSIC_MAX_BLOCKS][MIFARE_CLASSIC_BLOCK_SIZE];
+  static bool classicBlockRead[MIFARE_CLASSIC_MAX_BLOCKS];
+  MifareClassicDumpResult classicResult;
 
-  if (!authRequired) {
+  if (authRequired) {
+    classicResult = readMifareClassicWithDictionary(uid, uidLength, sak, classicDump, classicBlockRead);
+  } else {
     for (uint16_t address = 0; readCount < MAX_ISO14443A_READ_COMMANDS && address < 255; address += readStep) {
       uint8_t buffer[16] = {0};
       if (!nfc14443.mifareBlockRead(static_cast<uint8_t>(address), buffer)) {
@@ -549,7 +1114,7 @@ bool dumpIso14443AIfPresent() {
     }
   }
 
-  nfc14443.mifareHalt();
+  mifareHaltSafe();
 
   Serial.println(F("DUMP_BEGIN"));
   Serial.print(F("META type=ISO14443A protocol=ISO14443A uid="));
@@ -557,10 +1122,10 @@ bool dumpIso14443AIfPresent() {
   Serial.print(F(" uid_length="));
   Serial.print(uidLength);
   Serial.print(F(" rc=0 block_size=16 num_blocks="));
-  if (readCount > 0) {
+  if (authRequired) {
+    Serial.print(classicResult.blockCount);
+  } else if (readCount > 0) {
     Serial.print(readCount);
-  } else if (authRequired) {
-    Serial.print(mifareClassicBlockCount(sak));
   } else {
     Serial.print(F("-"));
   }
@@ -574,16 +1139,47 @@ bool dumpIso14443AIfPresent() {
   Serial.print(F(" read_step="));
   Serial.print(readStep);
   Serial.print(F(" memory_read="));
-  if (readCount > 0) {
+  if (authRequired && uidLength != 4) {
+    Serial.print(F("auth_uid_unsupported"));
+  } else if (authRequired && classicResult.blocksRead == classicResult.blockCount && classicResult.blockCount > 0) {
     Serial.print(F("ok"));
+  } else if (authRequired && classicResult.blocksRead > 0) {
+    Serial.print(F("partial"));
   } else if (authRequired) {
-    Serial.print(F("auth_required"));
+    Serial.print(F("auth_failed"));
+  } else if (readCount > 0) {
+    Serial.print(F("ok"));
   } else {
     Serial.print(F("unsupported_or_no_open_blocks"));
   }
+  if (authRequired) {
+    Serial.print(F(" blocks_read="));
+    Serial.print(classicResult.blocksRead);
+    Serial.print(F(" sectors="));
+    Serial.print(classicResult.sectorCount);
+    Serial.print(F(" sectors_authenticated="));
+    Serial.print(classicResult.sectorsAuthenticated);
+    Serial.print(F(" key_dictionary_size="));
+    Serial.print(MIFARE_CLASSIC_KEY_COUNT);
+  }
   Serial.println();
 
-  if (readCount > 0) {
+  if (authRequired && classicResult.blocksRead > 0) {
+    Serial.println(F("COMPACT_BEGIN"));
+    uint8_t emptyBlock[MIFARE_CLASSIC_BLOCK_SIZE] = {0};
+    for (uint16_t block = 0; block < classicResult.blockCount; ++block) {
+      if (!classicBlockRead[block]) {
+        Serial.print(F("INFO mfclassic_block_missing block="));
+        Serial.println(block);
+        printHexLine(emptyBlock, MIFARE_CLASSIC_BLOCK_SIZE);
+      } else {
+        Serial.print(F("INFO mfclassic_block block="));
+        Serial.println(block);
+        printHexLine(classicDump[block], MIFARE_CLASSIC_BLOCK_SIZE);
+      }
+    }
+    Serial.println(F("COMPACT_END"));
+  } else if (readCount > 0) {
     Serial.println(F("COMPACT_BEGIN"));
     for (uint8_t i = 0; i < readCount; ++i) {
       Serial.print(F("INFO typea_read address="));
@@ -598,7 +1194,7 @@ bool dumpIso14443AIfPresent() {
 }
 
 bool dumpFeliCaIfPresent() {
-  if (!setupRf(nfcFeliCa, F("FELICA"))) {
+  if (!setupRfSafe(0x09, 0x89, false, F("FELICA"))) {
     return false;
   }
 
