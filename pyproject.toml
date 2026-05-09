@@ -7,8 +7,14 @@ dependencies = [
   "pyserial>=3.5",
 ]
 
+[project.optional-dependencies]
+qt = [
+  "PyQt5>=5.15,<5.16",
+]
+
 [project.scripts]
 pn5180-dumper = "pn5180_dumper.cli:main"
+pn5180-dumper-qt = "pn5180_dumper.qt_app:main"
 
 [tool.setuptools]
 package-dir = {"" = "host/python"}

@@ -35,3 +35,4 @@
 - Small Qt GUI for Windows with port selector, scan table, tag details, dump viewer, and write panel.
 - Shared host library for both UI paths.
 
+Initial PyQt5 GUI exists and supports the current streaming capture mode. It should switch from passive serial capture to active `scan`, `identify`, `read`, `write`, and `dump` commands after protocol V2 is implemented in firmware.

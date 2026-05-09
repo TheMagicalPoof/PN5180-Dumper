@@ -24,7 +24,9 @@ Known limitation: `iClass` exists in the bundled PN5180 library, but it currentl
 - `host/python/pn5180_dumper/` - Python host package and CLI.
 - `docs/` - architecture, roadmap, and serial protocol notes.
 - `scripts/run_capture_once.bat` - Windows helper that captures one complete dump and exits.
+- `scripts/run_qt_app.bat` - Windows helper that starts the Qt5 GUI.
 - `requirements.txt` - Python dependencies.
+- `requirements-qt.txt` - optional Qt5 GUI dependency.
 
 ## Wiring
 
@@ -59,6 +61,13 @@ The host CLI can list ports and run the current streaming capture path:
 $env:PYTHONPATH = "host/python"
 python -m pn5180_dumper.cli ports
 python -m pn5180_dumper.cli capture --auto-port --once
+```
+
+Start the Qt5 GUI on Windows:
+
+```powershell
+pip install -r requirements.txt -r requirements-qt.txt
+.\scripts\run_qt_app.bat
 ```
 
 If auto-detection cannot choose the port, pass it explicitly:

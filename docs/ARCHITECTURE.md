@@ -59,6 +59,11 @@ The Python package is the shared host layer:
 
 The Windows Qt application can call this library directly or wrap the same protocol concepts in C++ later. The Linux console UI should stay usable over SSH/headless serial sessions.
 
+Current GUI path:
+
+- `host/python/pn5180_dumper/qt_app.py` - PyQt5 Windows GUI for port selection, live serial log, parsed record table, and capture saving.
+- The scan/read/write buttons are present as disabled placeholders until firmware command protocol V2 lands.
+
 ## Compatibility
 
 The current firmware still emits legacy streaming records:
@@ -73,4 +78,3 @@ DUMP_END
 ```
 
 The host keeps parsing this format while the new command protocol is introduced.
-
