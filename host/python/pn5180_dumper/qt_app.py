@@ -178,8 +178,7 @@ class MainWindow(QMainWindow):
         self.keys_edit = QPlainTextEdit("\n".join(DEFAULT_MIFARE_CLASSIC_KEYS))
         self.keys_edit.setMaximumBlockCount(256)
         self.auth_test_button = QPushButton("Test keys")
-        self.auth_test_button.setEnabled(False)
-        self.auth_test_button.setToolTip("Requires MIFARE Classic auth command in firmware")
+        self.auth_test_button.setToolTip("Validates the dictionary now; real card auth needs firmware support")
         self.auth_key_count_label = QLabel("")
         self.auth_result_table = QTableWidget(0, 4)
         self.auth_result_table.setHorizontalHeaderLabels(["Sector", "Key A", "Key B", "Status"])
@@ -323,6 +322,7 @@ class MainWindow(QMainWindow):
         self.write_load_button.clicked.connect(self.load_write_file)
         self.port_combo.currentIndexChanged.connect(self.save_selected_port)
         self.keys_edit.textChanged.connect(self.refresh_key_count)
+        self.auth_test_button.clicked.connect(self.test_keys)
 
     def refresh_ports(self) -> None:
         current = self.port_combo.currentData() or self.settings.value("connection/port", "")
@@ -478,8 +478,10 @@ class MainWindow(QMainWindow):
             keys = parse_key_list(self.keys_edit.toPlainText())
         except ValueError as exc:
             self.auth_key_count_label.setText(f"Invalid key list: {exc}")
+            self.auth_test_button.setEnabled(False)
             return
         self.auth_key_count_label.setText(f"{len(keys)} unique keys ready")
+        self.auth_test_button.setEnabled(True)
 
     def populate_auth_placeholder(self, sector_count: int) -> None:
         self.auth_result_table.setRowCount(sector_count)
@@ -488,6 +490,39 @@ class MainWindow(QMainWindow):
             self.auth_result_table.setItem(sector, 1, QTableWidgetItem("-"))
             self.auth_result_table.setItem(sector, 2, QTableWidgetItem("-"))
             self.auth_result_table.setItem(sector, 3, QTableWidgetItem("not tested"))
+
+    def test_keys(self) -> None:
+        try:
+            keys = parse_key_list(self.keys_edit.toPlainText())
+        except ValueError as exc:
+            QMessageBox.warning(self, "Invalid key list", str(exc))
+            return
+
+        if not self.current_metadata:
+            QMessageBox.information(self, "No tag", "Put a MIFARE Classic tag on the reader first.")
+            return
+
+        family = str(self.current_metadata.get("family", ""))
+        if "MIFARE_CLASSIC" not in family and self.current_metadata.get("memory_read") != "auth_required":
+            QMessageBox.information(
+                self,
+                "Not MIFARE Classic",
+                "Key testing is only relevant for MIFARE Classic tags.",
+            )
+            return
+
+        for row in range(self.auth_result_table.rowCount()):
+            self.auth_result_table.setItem(row, 3, QTableWidgetItem("pending firmware auth driver"))
+
+        QMessageBox.information(
+            self,
+            "Firmware support required",
+            (
+                f"{len(keys)} keys are valid and ready, but the ESP firmware does not yet "
+                "implement MIFARE Classic Crypto1 authentication. Next step is the "
+                "auth.test_keys command on firmware."
+            ),
+        )
 
     def populate_hex_table(self, table: QTableWidget, data: bytes) -> None:
         row_count = (len(data) + 15) // 16

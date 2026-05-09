@@ -13,6 +13,7 @@
 - Implement `hello`, `scan`, and `identify`.
 - Return capability metadata for each driver.
 - Keep legacy streaming capture behind a mode/config flag.
+- Implement `auth.test_keys` for MIFARE Classic with host-provided key dictionaries.
 
 ## Phase 3 - Read/Dump Operations
 
