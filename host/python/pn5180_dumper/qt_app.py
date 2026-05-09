@@ -170,6 +170,11 @@ class MainWindow(QMainWindow):
         self.brute_checked = 0
         self.brute_current_block: int | None = None
         self.brute_running = False
+        self.write_queue: list[tuple[int, bytes]] = []
+        self.write_total = 0
+        self.write_done = 0
+        self.write_failures: list[str] = []
+        self.write_running = False
 
         self.setWindowTitle(f"PN5180 Dumper Qt5 v{__version__}")
         self.resize(1080, 720)
@@ -214,7 +219,7 @@ class MainWindow(QMainWindow):
         self.write_verify_check.setChecked(True)
         self.write_button = QPushButton("Write")
         self.write_button.setEnabled(False)
-        self.write_button.setToolTip("Requires firmware command protocol V2")
+        self.write_button.setToolTip("Writes safe MIFARE Classic data blocks, skipping UID and trailer blocks")
 
         self._build_layout()
         self._connect_signals()
@@ -296,7 +301,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.write_hex_table, 3, 0, 1, 6)
         layout.addWidget(self.write_button, 4, 0, 1, 6)
         layout.addWidget(
-            QLabel("Write is intentionally disabled until explicit command-mode safety checks exist."),
+            QLabel("Safe mode: UID block 0 and sector trailers with keys/access bits are skipped."),
             5,
             0,
             1,
@@ -323,6 +328,7 @@ class MainWindow(QMainWindow):
         self.read_export_button.clicked.connect(self.export_current_dump)
         self.write_import_browse_button.clicked.connect(self.choose_write_import_path)
         self.write_load_button.clicked.connect(self.load_write_file)
+        self.write_button.clicked.connect(self.start_write_dump)
         self.port_combo.currentIndexChanged.connect(self.save_selected_port)
         self.stop_brute_button.clicked.connect(self.stop_brute)
         self.reset_button.clicked.connect(self.reset_session)
@@ -438,6 +444,8 @@ class MainWindow(QMainWindow):
                 self.current_device_label.setText(self._format_current_device(payload, "capturing"))
         elif line.startswith("PND1 BRUTE_RESULT"):
             self.handle_brute_result(self._parse_fields(line))
+        elif line.startswith("PND1 WRITE_RESULT"):
+            self.handle_write_result(self._parse_fields(line))
         self.log_view.appendPlainText(line)
 
     def _parse_fields(self, line: str) -> dict[str, str]:
@@ -484,6 +492,10 @@ class MainWindow(QMainWindow):
             self.read_export_button.setEnabled(True)
             self.read_export_path_edit.setText(str(dump_path))
             self.settings.setValue("paths/read_export", str(dump_path))
+            self.write_import_path_edit.setText(str(dump_path))
+            self.write_bytes = self.current_dump_bytes
+            self.populate_hex_table(self.write_hex_table, self.write_bytes)
+            self.write_button.setEnabled(bool(self.write_bytes))
         else:
             self.current_dump_bytes = b""
             self.current_block_statuses = []
@@ -534,6 +546,12 @@ class MainWindow(QMainWindow):
         self.current_folder = None
         self.current_dump_bytes = b""
         self.current_block_statuses = []
+        self.write_queue = []
+        self.write_total = 0
+        self.write_done = 0
+        self.write_failures = []
+        self.write_running = False
+        self.write_button.setEnabled(bool(self.write_bytes))
         self.populate_hex_table(self.read_hex_table, b"", enable_brute=True)
         self.read_export_button.setEnabled(False)
         self._set_tag_online(False)
@@ -635,7 +653,96 @@ class MainWindow(QMainWindow):
 
         self.populate_hex_table(self.write_hex_table, self.write_bytes)
         self.settings.setValue("paths/write_import", str(source))
+        self.write_button.setEnabled(bool(self.write_bytes))
         self.status_label.setText(f"Loaded {len(self.write_bytes)} bytes from {source}")
+
+    def start_write_dump(self) -> None:
+        if self.write_running:
+            QMessageBox.information(self, "Write running", "A write operation is already running.")
+            return
+        if not self.write_bytes:
+            QMessageBox.information(self, "No data", "Load a dump file first.")
+            return
+        if len(self.write_bytes) % 16 != 0:
+            QMessageBox.warning(self, "Invalid dump", "MIFARE Classic writes need a size aligned to 16-byte blocks.")
+            return
+
+        start_block = self.write_address_spin.value()
+        queue: list[tuple[int, bytes]] = []
+        skipped: list[int] = []
+        for source_block, offset in enumerate(range(0, len(self.write_bytes), 16)):
+            target_block = start_block + source_block
+            if target_block == 0 or self._is_mifare_classic_trailer_block(target_block):
+                skipped.append(target_block)
+                continue
+            queue.append((target_block, self.write_bytes[offset:offset + 16]))
+
+        if not queue:
+            QMessageBox.warning(self, "Nothing to write", "All blocks were skipped by safe-write protection.")
+            return
+
+        answer = QMessageBox.question(
+            self,
+            "Confirm write",
+            (
+                f"Write {len(queue)} data blocks to the tag now?\n\n"
+                f"Skipped protected blocks: {len(skipped)}.\n"
+                "Only use this on tags you own or are authorized to copy."
+            ),
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes:
+            return
+
+        if not self.worker:
+            self.start_capture(request_initial_dump=False)
+            if not self.worker:
+                return
+
+        self.write_queue = queue
+        self.write_total = len(queue)
+        self.write_done = 0
+        self.write_failures = []
+        self.write_running = True
+        self.write_button.setEnabled(False)
+        self.status_label.setText(f"Writing 0/{self.write_total} blocks...")
+        self.send_next_write_block()
+
+    def send_next_write_block(self) -> None:
+        if not self.write_running or not self.worker:
+            return
+        if not self.write_queue:
+            self.write_running = False
+            self.write_button.setEnabled(bool(self.write_bytes))
+            if self.write_failures:
+                self.status_label.setText(
+                    f"Write finished with {len(self.write_failures)} failed blocks: {', '.join(self.write_failures[:8])}"
+                )
+            else:
+                self.status_label.setText(f"Write complete: {self.write_done}/{self.write_total} blocks")
+            return
+
+        block, data = self.write_queue.pop(0)
+        verify = " VERIFY" if self.write_verify_check.isChecked() else ""
+        self.worker.send_command(f"PND1 WRITE {block} {data.hex().upper()}{verify}")
+
+    def handle_write_result(self, fields: dict[str, str]) -> None:
+        if not self.write_running:
+            return
+        block = fields.get("block", "?")
+        status = fields.get("status", "unknown")
+        if status == "ok":
+            self.write_done += 1
+        elif status != "skipped_protected":
+            self.write_failures.append(f"{block}:{status}")
+        self.status_label.setText(f"Writing {self.write_done}/{self.write_total} blocks...")
+        self.send_next_write_block()
+
+    def _is_mifare_classic_trailer_block(self, block: int) -> bool:
+        if block < 128:
+            return block % 4 == 3
+        return (block - 128) % 16 == 15
 
     def populate_hex_table(
         self,
