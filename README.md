@@ -10,6 +10,8 @@ The current firmware still supports streaming captures over serial. The reposito
 - `ISO14443A` - UID detection plus best-effort reading of openly readable MIFARE/NTAG-style 16-byte reads.
 - `FELICA` - IDm detection. Memory dump is not implemented because the bundled PN5180 library exposes polling/serial detection only.
 
+MIFARE Classic tags are detected as ISO14443A, but memory read/write requires Crypto1 authentication. Until that driver exists, the firmware reports `memory_read=auth_required` instead of emitting a fake or empty dump.
+
 Known limitation: `iClass` exists in the bundled PN5180 library, but it currently conflicts with the ISO15693 header when both are included in the same sketch. It will need a separate compatibility wrapper or a separate sketch before it can be enabled in the unified scanner.
 
 ## Hardware

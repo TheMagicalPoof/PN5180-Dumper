@@ -7,6 +7,7 @@ from serial.tools import list_ports
 
 from PyQt5.QtCore import QThread, pyqtSignal
 from PyQt5.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
@@ -21,6 +22,7 @@ from PyQt5.QtWidgets import (
     QPushButton,
     QPlainTextEdit,
     QSpinBox,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -135,24 +137,46 @@ class MainWindow(QMainWindow):
         self.disconnect_button = QPushButton("Stop")
         self.disconnect_button.setEnabled(False)
 
-        self.scan_button = QPushButton("Scan")
-        self.identify_button = QPushButton("Identify")
-        self.read_button = QPushButton("Read")
-        self.write_button = QPushButton("Write")
-        for button in (self.scan_button, self.identify_button, self.read_button, self.write_button):
-            button.setEnabled(False)
-            button.setToolTip("Reserved for firmware command protocol V2")
+        self.scan_button = QPushButton("Scan devices")
+        self.scan_button.setEnabled(False)
+        self.scan_button.setToolTip("Reserved for firmware command protocol V2")
 
         self.status_label = QLabel("Idle")
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(4000)
 
-        self.records_table = QTableWidget(0, 7)
+        self.selected_device_label = QLabel("Selected device: none")
+
+        self.records_table = QTableWidget(0, 8)
         self.records_table.setHorizontalHeaderLabels(
-            ["Type", "UID", "RC", "Blocks", "Block size", "Dump", "Folder"]
+            ["Type", "UID", "RC", "Blocks", "Block size", "Memory", "Dump", "Folder"]
         )
         self.records_table.horizontalHeader().setStretchLastSection(True)
+        self.records_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.records_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.records_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+
+        self.mode_tabs = QTabWidget()
+        self.read_start_spin = QSpinBox()
+        self.read_start_spin.setRange(0, 65535)
+        self.read_count_spin = QSpinBox()
+        self.read_count_spin.setRange(1, 4096)
+        self.read_count_spin.setValue(1)
+        self.read_button = QPushButton("Read")
+        self.read_button.setEnabled(False)
+        self.read_button.setToolTip("Requires firmware command protocol V2")
+
+        self.write_address_spin = QSpinBox()
+        self.write_address_spin.setRange(0, 65535)
+        self.write_hex_edit = QPlainTextEdit()
+        self.write_hex_edit.setPlaceholderText("Hex bytes, for example: 01 02 03 04")
+        self.write_hex_edit.setMaximumBlockCount(64)
+        self.write_verify_check = QCheckBox("Verify after write")
+        self.write_verify_check.setChecked(True)
+        self.write_button = QPushButton("Write")
+        self.write_button.setEnabled(False)
+        self.write_button.setToolTip("Requires firmware command protocol V2")
 
         self._build_layout()
         self._connect_signals()
@@ -179,25 +203,72 @@ class MainWindow(QMainWindow):
         button_row.addWidget(self.disconnect_button)
         button_row.addStretch(1)
         button_row.addWidget(self.scan_button)
-        button_row.addWidget(self.identify_button)
-        button_row.addWidget(self.read_button)
-        button_row.addWidget(self.write_button)
         connection_layout.addLayout(button_row, 3, 0, 1, 6)
 
+        devices_box = QGroupBox("Found devices")
+        devices_layout = QVBoxLayout(devices_box)
+        devices_layout.addWidget(self.records_table)
+
+        mode_box = QGroupBox("Mode")
+        mode_layout = QVBoxLayout(mode_box)
+        mode_layout.addWidget(self.selected_device_label)
+        mode_layout.addWidget(self.mode_tabs)
+        self.mode_tabs.addTab(self._build_read_tab(), "Read")
+        self.mode_tabs.addTab(self._build_write_tab(), "Write")
+
+        log_box = QGroupBox("Diagnostic serial log")
+        log_layout = QVBoxLayout(log_box)
+        log_layout.addWidget(self.log_view)
+
         main_layout.addWidget(connection_box)
-        main_layout.addWidget(QLabel("Detected records"))
-        main_layout.addWidget(self.records_table, 2)
-        main_layout.addWidget(QLabel("Serial log"))
-        main_layout.addWidget(self.log_view, 3)
+        main_layout.addWidget(devices_box, 4)
+        main_layout.addWidget(mode_box, 3)
+        main_layout.addWidget(log_box, 2)
         main_layout.addWidget(self.status_label)
 
         self.setCentralWidget(root)
+
+    def _build_read_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QGridLayout(tab)
+        layout.addWidget(QLabel("Start block/page"), 0, 0)
+        layout.addWidget(self.read_start_spin, 0, 1)
+        layout.addWidget(QLabel("Count"), 0, 2)
+        layout.addWidget(self.read_count_spin, 0, 3)
+        layout.addWidget(self.read_button, 1, 0, 1, 4)
+        layout.addWidget(
+            QLabel("Read will become active after firmware command protocol V2 is implemented."),
+            2,
+            0,
+            1,
+            4,
+        )
+        return tab
+
+    def _build_write_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QGridLayout(tab)
+        layout.addWidget(QLabel("Target block/page"), 0, 0)
+        layout.addWidget(self.write_address_spin, 0, 1)
+        layout.addWidget(self.write_verify_check, 0, 2, 1, 2)
+        layout.addWidget(QLabel("Data"), 1, 0)
+        layout.addWidget(self.write_hex_edit, 1, 1, 1, 3)
+        layout.addWidget(self.write_button, 2, 0, 1, 4)
+        layout.addWidget(
+            QLabel("Write is intentionally disabled until explicit command-mode safety checks exist."),
+            3,
+            0,
+            1,
+            4,
+        )
+        return tab
 
     def _connect_signals(self) -> None:
         self.refresh_button.clicked.connect(self.refresh_ports)
         self.browse_button.clicked.connect(self.choose_out_dir)
         self.connect_button.clicked.connect(self.start_capture)
         self.disconnect_button.clicked.connect(self.stop_capture)
+        self.records_table.itemSelectionChanged.connect(self.update_selected_device)
 
     def refresh_ports(self) -> None:
         current = self.port_combo.currentData()
@@ -263,12 +334,32 @@ class MainWindow(QMainWindow):
             metadata.get("rc", "-"),
             str(metadata.get("num_blocks") or "-"),
             str(metadata.get("block_size") or "-"),
+            str(metadata.get("memory_read") or "-"),
             "yes" if metadata.get("has_dump") else "no",
             folder,
         ]
         for column, value in enumerate(values):
             self.records_table.setItem(row, column, QTableWidgetItem(value))
+        self.records_table.selectRow(row)
         self.status_label.setText(f"Saved record to {folder}")
+
+    def update_selected_device(self) -> None:
+        selected_ranges = self.records_table.selectedRanges()
+        if not selected_ranges:
+            self.selected_device_label.setText("Selected device: none")
+            return
+
+        row = selected_ranges[0].topRow()
+        tag_type = self._table_text(row, 0)
+        uid = self._table_text(row, 1)
+        memory = self._table_text(row, 5)
+        self.selected_device_label.setText(
+            f"Selected device: {tag_type} / UID {uid} / memory {memory}"
+        )
+
+    def _table_text(self, row: int, column: int) -> str:
+        item = self.records_table.item(row, column)
+        return item.text() if item else "-"
 
     def set_status(self, status: str) -> None:
         self.status_label.setText(status)
@@ -293,4 +384,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

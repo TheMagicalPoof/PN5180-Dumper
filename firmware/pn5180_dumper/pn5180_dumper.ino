@@ -423,6 +423,22 @@ const __FlashStringHelper *classifyIso14443A(uint8_t sak) {
   }
 }
 
+bool isMifareClassicSak(uint8_t sak) {
+  return sak == 0x08 || sak == 0x09 || sak == 0x18;
+}
+
+uint16_t mifareClassicBlockCount(uint8_t sak) {
+  switch (sak) {
+    case 0x09:
+      return 20;  // MIFARE Mini: 5 sectors * 4 blocks.
+    case 0x18:
+      return 256; // MIFARE Classic 4K.
+    case 0x08:
+    default:
+      return 64;  // MIFARE Classic 1K.
+  }
+}
+
 uint8_t iso14443AReadStep(uint8_t sak) {
   // Ultralight/NTAG READ returns four 4-byte pages at once. Other Type A tags
   // usually expose 16-byte blocks or require protocol-specific/authenticated IO.
@@ -516,20 +532,21 @@ bool dumpIso14443AIfPresent() {
   uint8_t blockData[MAX_ISO14443A_READ_COMMANDS][16];
   uint8_t readAddresses[MAX_ISO14443A_READ_COMMANDS] = {0};
   uint8_t readCount = 0;
+  const bool authRequired = isMifareClassicSak(sak);
 
-  for (uint16_t address = 0; readCount < MAX_ISO14443A_READ_COMMANDS && address < 255; address += readStep) {
-    uint8_t buffer[16] = {0};
-    if (!nfc14443.mifareBlockRead(static_cast<uint8_t>(address), buffer)) {
-      Serial.print(F("INFO typea_read_stop address="));
-      Serial.println(address);
-      break;
-    }
+  if (!authRequired) {
+    for (uint16_t address = 0; readCount < MAX_ISO14443A_READ_COMMANDS && address < 255; address += readStep) {
+      uint8_t buffer[16] = {0};
+      if (!nfc14443.mifareBlockRead(static_cast<uint8_t>(address), buffer)) {
+        break;
+      }
 
-    readAddresses[readCount] = static_cast<uint8_t>(address);
-    for (uint8_t i = 0; i < 16; ++i) {
-      blockData[readCount][i] = buffer[i];
+      readAddresses[readCount] = static_cast<uint8_t>(address);
+      for (uint8_t i = 0; i < 16; ++i) {
+        blockData[readCount][i] = buffer[i];
+      }
+      ++readCount;
     }
-    ++readCount;
   }
 
   nfc14443.mifareHalt();
@@ -542,6 +559,8 @@ bool dumpIso14443AIfPresent() {
   Serial.print(F(" rc=0 block_size=16 num_blocks="));
   if (readCount > 0) {
     Serial.print(readCount);
+  } else if (authRequired) {
+    Serial.print(mifareClassicBlockCount(sak));
   } else {
     Serial.print(F("-"));
   }
@@ -554,6 +573,14 @@ bool dumpIso14443AIfPresent() {
   Serial.print(classifyIso14443A(sak));
   Serial.print(F(" read_step="));
   Serial.print(readStep);
+  Serial.print(F(" memory_read="));
+  if (readCount > 0) {
+    Serial.print(F("ok"));
+  } else if (authRequired) {
+    Serial.print(F("auth_required"));
+  } else {
+    Serial.print(F("unsupported_or_no_open_blocks"));
+  }
   Serial.println();
 
   if (readCount > 0) {
