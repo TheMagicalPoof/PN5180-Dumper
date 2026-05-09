@@ -1,18 +1,26 @@
 # PN5180 Dumper
 
-PN5180 Dumper captures ISO15693 RFID tag memory dumps with a PN5180 reader and a XIAO ESP32-S3 board.
+PN5180 Dumper captures RFID/NFC tag data with a PN5180 reader and a XIAO ESP32-S3 board.
 
-The Arduino sketch reads the tag through the PN5180 module and prints a structured dump to the serial port. The Python utility listens to that serial output, detects a complete dump, and saves metadata plus binary and hex dump files.
+The Arduino sketch scans the tag through the PN5180 module and prints structured records to the serial port. The Python utility listens to that serial output, detects complete records, and saves metadata plus binary and hex dump files when memory data is available.
+
+## Supported Tags
+
+- `ISO15693` - full memory dump when System Info exposes block size and block count.
+- `ISO14443A` - UID detection plus best-effort reading of openly readable MIFARE/NTAG-style 16-byte reads.
+- `FELICA` - IDm detection. Memory dump is not implemented because the bundled PN5180 library exposes polling/serial detection only.
+
+Known limitation: `iClass` exists in the bundled PN5180 library, but it currently conflicts with the ISO15693 header when both are included in the same sketch. It will need a separate compatibility wrapper or a separate sketch before it can be enabled in the unified scanner.
 
 ## Hardware
 
 - Seeed Studio XIAO ESP32-S3
 - PN5180 RFID/NFC module
-- ISO15693-compatible tag
+- ISO15693, ISO14443A, or FeliCa-compatible tag
 
 ## Files
 
-- `DumpInfo.ino` - Arduino sketch for PN5180 ISO15693 reading.
+- `DumpInfo.ino` - Arduino sketch for PN5180 tag scanning and best-effort dumping.
 - `capture_dump.py` - Serial capture utility that saves complete dumps.
 - `run_capture_once.bat` - Windows helper that captures one complete dump and exits.
 - `requirements.txt` - Python dependencies.
@@ -60,10 +68,9 @@ python capture_dump.py --port COM6 --once
 
 Each successful capture is saved under `captures/<timestamp>_<uid>/`:
 
-- `metadata.json` - tag metadata and SHA-256 of the binary dump.
-- `dump.hex` - formatted hex dump.
-- `dump.bin` - raw binary dump.
+- `metadata.json` - tag metadata and SHA-256 when a binary dump was captured.
+- `dump.hex` - formatted hex dump, when readable memory data was captured.
+- `dump.bin` - raw binary dump, when readable memory data was captured.
 - `raw_serial.log` - full serial log from the board.
 
 `captures/` is ignored by git because real RFID dumps can contain private tag data.
-

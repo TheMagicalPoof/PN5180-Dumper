@@ -32,6 +32,7 @@ class TagMetadata:
     dsfid: str | None
     afi: str | None
     ic_reference: str | None
+    extra: dict[str, str]
 
 
 class DumpCapture:
@@ -111,7 +112,9 @@ class DumpCapture:
         return False
 
     def is_complete(self) -> bool:
-        return self.metadata is not None and len(self.compact_hex_lines) > 0
+        if self.metadata is None:
+            return False
+        return bool(self.compact_hex_lines) or self.metadata.uid not in {"", "-"}
 
 
 def normalize_hex_line(line: str) -> str | None:
@@ -141,6 +144,7 @@ def parse_metadata(line: str) -> TagMetadata:
         dsfid=parse_optional_text(parts[5]),
         afi=parse_optional_text(parts[6]),
         ic_reference=parse_optional_text(parts[7]),
+        extra={},
     )
 
 
@@ -153,6 +157,17 @@ def parse_new_metadata(line: str) -> TagMetadata:
         key, value = part.split("=", 1)
         fields[key] = value
 
+    known_fields = {
+        "type",
+        "uid",
+        "rc",
+        "block_size",
+        "num_blocks",
+        "dsfid",
+        "afi",
+        "ic_reference",
+    }
+
     return TagMetadata(
         tag_type=fields.get("type", "-"),
         uid=fields.get("uid", "-"),
@@ -162,6 +177,11 @@ def parse_new_metadata(line: str) -> TagMetadata:
         dsfid=parse_optional_text(fields.get("dsfid", "-")),
         afi=parse_optional_text(fields.get("afi", "-")),
         ic_reference=parse_optional_text(fields.get("ic_reference", "-")),
+        extra={
+            key: value
+            for key, value in fields.items()
+            if key not in known_fields and value not in {"", "-"}
+        },
     )
 
 
@@ -223,7 +243,8 @@ def save_capture(capture: DumpCapture, out_dir: Path) -> Path:
     target_dir.mkdir(parents=True, exist_ok=True)
 
     binary = dump_to_bytes(capture.compact_hex_lines)
-    sha256 = hashlib.sha256(binary).hexdigest()
+    has_dump = bool(capture.compact_hex_lines)
+    sha256 = hashlib.sha256(binary).hexdigest() if has_dump else None
 
     metadata = {
         "captured_at_utc": timestamp,
@@ -237,21 +258,25 @@ def save_capture(capture: DumpCapture, out_dir: Path) -> Path:
         "ic_reference": capture.metadata.ic_reference,
         "sha256": sha256,
         "byte_length": len(binary),
+        "has_dump": has_dump,
     }
+    metadata.update(capture.metadata.extra)
 
     (target_dir / "metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    (target_dir / "dump.hex").write_text(
-        "\n".join(capture.compact_hex_display_lines) + "\n",
-        encoding="ascii",
-    )
+    if capture.compact_hex_lines:
+        (target_dir / "dump.hex").write_text(
+            "\n".join(capture.compact_hex_display_lines) + "\n",
+            encoding="ascii",
+        )
     (target_dir / "raw_serial.log").write_text(
         "\n".join(capture.raw_lines) + "\n",
         encoding="utf-8",
     )
-    (target_dir / "dump.bin").write_bytes(binary)
+    if capture.compact_hex_lines:
+        (target_dir / "dump.bin").write_bytes(binary)
 
     return target_dir
 
