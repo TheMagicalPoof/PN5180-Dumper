@@ -30,7 +30,7 @@ from PyQt5.QtWidgets import (
 )
 
 from . import __version__
-from .capture import DumpCapture, save_capture
+from .capture import DumpCapture, parse_new_metadata, save_capture
 from .keys import DEFAULT_MIFARE_CLASSIC_KEYS, parse_key_list
 
 
@@ -412,7 +412,46 @@ class MainWindow(QMainWindow):
         self._set_reader_online(True)
         if line == "INFO no_card":
             self._set_tag_online(False)
+        elif line.startswith("TAG_DETECTED "):
+            self.update_detected_tag(line[len("TAG_DETECTED "):], "detecting")
+        elif line.startswith("META "):
+            try:
+                metadata = parse_new_metadata(line)
+            except ValueError:
+                metadata = None
+            if metadata:
+                payload = {
+                    "type": metadata.tag_type,
+                    "uid": metadata.uid,
+                    "rc": metadata.rc,
+                    "block_size": metadata.block_size,
+                    "num_blocks": metadata.num_blocks,
+                }
+                payload.update(metadata.extra)
+                self.current_metadata = payload
+                self._set_tag_online(True)
+                self.current_device_label.setText(self._format_current_device(payload, "capturing"))
         self.log_view.appendPlainText(line)
+
+    def update_detected_tag(self, payload: str, memory_state: str) -> None:
+        fields: dict[str, str] = {}
+        for part in payload.split():
+            if "=" not in part:
+                continue
+            key, value = part.split("=", 1)
+            fields[key] = value
+
+        metadata = {
+            "type": fields.get("type", "-"),
+            "uid": fields.get("uid", "-"),
+            "memory_read": memory_state,
+            "family": fields.get("family", "-"),
+            "sak": fields.get("sak", "-"),
+            "num_blocks": None,
+        }
+        self.current_metadata = metadata
+        self._set_tag_online(True)
+        self.current_device_label.setText(self._format_current_device(metadata, "capturing"))
 
     def add_record(self, metadata: dict, folder: str) -> None:
         self.current_metadata = metadata

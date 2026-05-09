@@ -295,6 +295,20 @@ ISO15693ErrorCode getMultipleBlockSecurityStatus(uint8_t *uid, uint8_t firstBloc
   return ISO15693_EC_OK;
 }
 
+ISO15693ErrorCode getIso15693InventorySafe(uint8_t *uid) {
+  uint8_t inventory[] = {0x26, 0x01, 0x00};
+  uint8_t *result = nullptr;
+  ISO15693ErrorCode rc = ISO15693_EC_UNKNOWN_ERROR;
+  if (!issueIso15693Raw(inventory, sizeof(inventory), &result, rc)) {
+    return rc;
+  }
+
+  for (uint8_t i = 0; i < 8; ++i) {
+    uid[i] = result[2 + i];
+  }
+  return ISO15693_EC_OK;
+}
+
 SystemInfoData readSystemInfo(uint8_t *uid) {
   SystemInfoData info;
   uint8_t cmd[] = {0x22, 0x2B, 1, 2, 3, 4, 5, 6, 7, 8};
@@ -1011,7 +1025,7 @@ bool dumpIso15693IfPresent() {
     return false;
   }
 
-  ISO15693ErrorCode rc = nfc15693.getInventory(uid);
+  ISO15693ErrorCode rc = getIso15693InventorySafe(uid);
   if (rc != ISO15693_EC_OK) {
     return false;
   }
@@ -1075,7 +1089,7 @@ bool dumpIso14443AIfPresent() {
   }
 
   uint8_t response[10] = {0};
-  uint8_t uidLength = nfc14443.activateTypeA(response, 1);
+  uint8_t uidLength = activateTypeASafe(response, 1);
   if (uidLength == 0) {
     return false;
   }
@@ -1096,6 +1110,18 @@ bool dumpIso14443AIfPresent() {
   static uint8_t classicDump[MIFARE_CLASSIC_MAX_BLOCKS][MIFARE_CLASSIC_BLOCK_SIZE];
   static bool classicBlockRead[MIFARE_CLASSIC_MAX_BLOCKS];
   MifareClassicDumpResult classicResult;
+
+  Serial.print(F("TAG_DETECTED type=ISO14443A protocol=ISO14443A uid="));
+  printHexCompact(uid, uidLength);
+  Serial.print(F(" uid_length="));
+  Serial.print(uidLength);
+  Serial.print(F(" atqa="));
+  printHexByte(atqa0);
+  printHexByte(atqa1);
+  Serial.print(F(" sak="));
+  printHexByte(sak);
+  Serial.print(F(" family="));
+  Serial.println(classifyIso14443A(sak));
 
   if (authRequired) {
     classicResult = readMifareClassicWithDictionary(uid, uidLength, sak, classicDump, classicBlockRead);
@@ -1231,7 +1257,7 @@ void setup() {
 }
 
 void loop() {
-  if (dumpIso15693IfPresent() || dumpIso14443AIfPresent() || dumpFeliCaIfPresent()) {
+  if (dumpIso14443AIfPresent() || dumpIso15693IfPresent() || dumpFeliCaIfPresent()) {
     delay(3000);
     return;
   }
