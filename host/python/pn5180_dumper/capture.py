@@ -258,13 +258,13 @@ def save_capture(capture: DumpCapture, out_dir: Path) -> Path:
     assert capture.metadata is not None
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    uid = sanitize_uid(capture.metadata.uid or "unknown")
-    target_dir = out_dir / f"{timestamp}_{uid}"
-    target_dir.mkdir(parents=True, exist_ok=True)
-
     binary = dump_to_bytes(capture.compact_hex_lines)
     has_dump = bool(capture.compact_hex_lines)
     sha256 = hashlib.sha256(binary).hexdigest() if has_dump else None
+    uid = sanitize_uid(capture.metadata.uid or "unknown")
+    suffix = sha256[:12] if sha256 else uid
+    target_dir = out_dir / f"{timestamp}_{suffix}"
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     metadata = {
         "captured_at_utc": timestamp,

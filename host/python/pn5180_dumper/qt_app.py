@@ -33,7 +33,7 @@ from PyQt5.QtWidgets import (
 
 from . import __version__
 from .capture import DumpCapture, parse_new_metadata, save_capture
-from .keys import DEFAULT_MIFARE_CLASSIC_KEYS, load_proxmark_mfc_keys, parse_key_list
+from .keys import load_proxmark_mfc_keys
 
 
 DEFAULT_BAUD = 460800
@@ -177,7 +177,6 @@ class MainWindow(QMainWindow):
         self.reader_indicator = QLabel()
         self.reader_state_label = QLabel("Reader: offline")
         self.port_combo = QComboBox()
-        self.once_check = QCheckBox("Stop after first record")
 
         self.connect_button = QPushButton("Refresh ports and read once")
         self.disconnect_button = QPushButton("Stop")
@@ -196,18 +195,11 @@ class MainWindow(QMainWindow):
         self.current_device_label = QLabel("Current tag: none")
 
         self.mode_tabs = QTabWidget()
-        self.read_start_spin = QSpinBox()
-        self.read_start_spin.setRange(0, 65535)
-        self.read_count_spin = QSpinBox()
-        self.read_count_spin.setRange(1, 4096)
-        self.read_count_spin.setValue(1)
         self.read_export_path_edit = QLineEdit(str(self.settings.value("paths/read_export", "")))
         self.read_export_browse_button = QPushButton("Browse")
         self.read_export_button = QPushButton("Export dump")
         self.read_export_button.setEnabled(False)
         self.read_hex_table = self._create_hex_table(action_columns=True)
-        self.read_button = QPushButton("Read once")
-        self.read_button.setToolTip("Sends one explicit PND1 DUMP command to the reader")
         self.stop_brute_button = QPushButton("Stop Brute")
         self.stop_brute_button.setEnabled(True)
         self.reset_button = QPushButton("RESET")
@@ -223,15 +215,6 @@ class MainWindow(QMainWindow):
         self.write_button = QPushButton("Write")
         self.write_button.setEnabled(False)
         self.write_button.setToolTip("Requires firmware command protocol V2")
-        self.keys_edit = QPlainTextEdit("\n".join(DEFAULT_MIFARE_CLASSIC_KEYS))
-        self.keys_edit.setMaximumBlockCount(256)
-        self.auth_test_button = QPushButton("Test keys")
-        self.auth_test_button.setToolTip("Validates the dictionary now; real card auth needs firmware support")
-        self.auth_key_count_label = QLabel("")
-        self.auth_result_table = QTableWidget(0, 4)
-        self.auth_result_table.setHorizontalHeaderLabels(["Sector", "Key A", "Key B", "Status"])
-        self.auth_result_table.horizontalHeader().setStretchLastSection(True)
-        self.auth_result_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
 
         self._build_layout()
         self._connect_signals()
@@ -252,7 +235,6 @@ class MainWindow(QMainWindow):
         connection_layout.addLayout(reader_row, 0, 0, 1, 6)
         connection_layout.addWidget(QLabel("Port"), 1, 0)
         connection_layout.addWidget(self.port_combo, 1, 1, 1, 5)
-        connection_layout.addWidget(self.once_check, 2, 1)
 
         button_row = QHBoxLayout()
         button_row.addWidget(self.connect_button)
@@ -274,7 +256,6 @@ class MainWindow(QMainWindow):
         mode_layout.addWidget(self.mode_tabs)
         self.mode_tabs.addTab(self._build_read_tab(), "Read")
         self.mode_tabs.addTab(self._build_write_tab(), "Write")
-        self.mode_tabs.addTab(self._build_auth_tab(), "Keys/Auth")
 
         log_box = QGroupBox("Diagnostic serial log")
         log_layout = QVBoxLayout(log_box)
@@ -291,26 +272,14 @@ class MainWindow(QMainWindow):
     def _build_read_tab(self) -> QWidget:
         tab = QWidget()
         layout = QGridLayout(tab)
-        layout.addWidget(QLabel("Start block/page"), 0, 0)
-        layout.addWidget(self.read_start_spin, 0, 1)
-        layout.addWidget(QLabel("Count"), 0, 2)
-        layout.addWidget(self.read_count_spin, 0, 3)
-        layout.addWidget(self.read_button, 0, 4)
-        layout.addWidget(self.stop_brute_button, 0, 5)
-        layout.addWidget(self.reset_button, 0, 6)
-        layout.addWidget(QLabel("Export path"), 1, 0)
-        layout.addWidget(self.read_export_path_edit, 1, 1, 1, 3)
-        layout.addWidget(self.read_export_browse_button, 1, 4)
-        layout.addWidget(self.read_export_button, 1, 5)
-        layout.addWidget(QLabel("Raw dump"), 2, 0, 1, 6)
-        layout.addWidget(self.read_hex_table, 3, 0, 1, 6)
-        layout.addWidget(
-            QLabel("Firmware is command-driven: no cyclic reads, use Read once for a new dump."),
-            4,
-            0,
-            1,
-            6,
-        )
+        layout.addWidget(QLabel("Export path"), 0, 0)
+        layout.addWidget(self.read_export_path_edit, 0, 1, 1, 3)
+        layout.addWidget(self.read_export_browse_button, 0, 4)
+        layout.addWidget(self.read_export_button, 0, 5)
+        layout.addWidget(self.stop_brute_button, 0, 6)
+        layout.addWidget(self.reset_button, 0, 7)
+        layout.addWidget(QLabel("Raw dump"), 1, 0, 1, 8)
+        layout.addWidget(self.read_hex_table, 2, 0, 1, 8)
         return tab
 
     def _build_write_tab(self) -> QWidget:
@@ -335,26 +304,6 @@ class MainWindow(QMainWindow):
         )
         return tab
 
-    def _build_auth_tab(self) -> QWidget:
-        tab = QWidget()
-        layout = QGridLayout(tab)
-        layout.addWidget(QLabel("MIFARE Classic key dictionary"), 0, 0, 1, 4)
-        layout.addWidget(self.keys_edit, 1, 0, 1, 4)
-        layout.addWidget(self.auth_test_button, 2, 0)
-        layout.addWidget(self.auth_key_count_label, 2, 1, 1, 3)
-        layout.addWidget(QLabel("Sector auth results"), 3, 0, 1, 4)
-        layout.addWidget(self.auth_result_table, 4, 0, 1, 4)
-        layout.addWidget(
-            QLabel("Key testing will become active after MIFARE Classic auth lands in firmware."),
-            5,
-            0,
-            1,
-            4,
-        )
-        self.refresh_key_count()
-        self.populate_auth_placeholder(16)
-        return tab
-
     def _create_hex_table(self, action_columns: bool = False) -> QTableWidget:
         headers = ["Offset"] + [f"{i:02X}" for i in range(16)]
         if action_columns:
@@ -370,14 +319,11 @@ class MainWindow(QMainWindow):
     def _connect_signals(self) -> None:
         self.connect_button.clicked.connect(lambda _checked=False: self.start_capture(request_initial_dump=True))
         self.disconnect_button.clicked.connect(self.stop_capture)
-        self.read_button.clicked.connect(lambda _checked=False: self.request_dump_once())
         self.read_export_browse_button.clicked.connect(self.choose_read_export_path)
         self.read_export_button.clicked.connect(self.export_current_dump)
         self.write_import_browse_button.clicked.connect(self.choose_write_import_path)
         self.write_load_button.clicked.connect(self.load_write_file)
         self.port_combo.currentIndexChanged.connect(self.save_selected_port)
-        self.keys_edit.textChanged.connect(self.refresh_key_count)
-        self.auth_test_button.clicked.connect(self.test_keys)
         self.stop_brute_button.clicked.connect(self.stop_brute)
         self.reset_button.clicked.connect(self.reset_session)
 
@@ -440,7 +386,7 @@ class MainWindow(QMainWindow):
             port=port,
             baud=DEFAULT_BAUD,
             out_dir=out_dir,
-            once=self.once_check.isChecked(),
+            once=False,
         )
         self.worker.line_received.connect(self.append_log)
         self.worker.record_saved.connect(self.add_record)
@@ -455,13 +401,6 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Connecting...")
         if request_initial_dump:
             self.worker.send_command("PND1 DUMP")
-
-    def request_dump_once(self) -> None:
-        if not self.worker:
-            self.start_capture(request_initial_dump=True)
-            return
-        self.worker.send_command("PND1 DUMP")
-        self.status_label.setText("Read requested")
 
     def stop_capture(self) -> None:
         if self.worker:
@@ -543,10 +482,8 @@ class MainWindow(QMainWindow):
                 enable_brute=True,
             )
             self.read_export_button.setEnabled(True)
-            default_export = self.read_export_path_edit.text().strip()
-            if not default_export:
-                export_path = str(Path(folder) / "export.bin")
-                self.read_export_path_edit.setText(export_path)
+            self.read_export_path_edit.setText(str(dump_path))
+            self.settings.setValue("paths/read_export", str(dump_path))
         else:
             self.current_dump_bytes = b""
             self.current_block_statuses = []
@@ -557,7 +494,6 @@ class MainWindow(QMainWindow):
 
     def start_brute_for_block(self, block: int) -> None:
         if not self.worker:
-            self.once_check.setChecked(False)
             self.start_capture(request_initial_dump=False)
             if not self.worker:
                 QMessageBox.information(self, "Serial is stopped", "Start capture first and keep the port connected.")
@@ -700,57 +636,6 @@ class MainWindow(QMainWindow):
         self.populate_hex_table(self.write_hex_table, self.write_bytes)
         self.settings.setValue("paths/write_import", str(source))
         self.status_label.setText(f"Loaded {len(self.write_bytes)} bytes from {source}")
-
-    def refresh_key_count(self) -> None:
-        try:
-            keys = parse_key_list(self.keys_edit.toPlainText())
-        except ValueError as exc:
-            self.auth_key_count_label.setText(f"Invalid key list: {exc}")
-            self.auth_test_button.setEnabled(False)
-            return
-        self.auth_key_count_label.setText(f"{len(keys)} unique keys ready")
-        self.auth_test_button.setEnabled(True)
-
-    def populate_auth_placeholder(self, sector_count: int) -> None:
-        self.auth_result_table.setRowCount(sector_count)
-        for sector in range(sector_count):
-            self.auth_result_table.setItem(sector, 0, QTableWidgetItem(str(sector)))
-            self.auth_result_table.setItem(sector, 1, QTableWidgetItem("-"))
-            self.auth_result_table.setItem(sector, 2, QTableWidgetItem("-"))
-            self.auth_result_table.setItem(sector, 3, QTableWidgetItem("not tested"))
-
-    def test_keys(self) -> None:
-        try:
-            keys = parse_key_list(self.keys_edit.toPlainText())
-        except ValueError as exc:
-            QMessageBox.warning(self, "Invalid key list", str(exc))
-            return
-
-        if not self.current_metadata:
-            QMessageBox.information(self, "No tag", "Put a MIFARE Classic tag on the reader first.")
-            return
-
-        family = str(self.current_metadata.get("family", ""))
-        if "MIFARE_CLASSIC" not in family and self.current_metadata.get("memory_read") != "auth_required":
-            QMessageBox.information(
-                self,
-                "Not MIFARE Classic",
-                "Key testing is only relevant for MIFARE Classic tags.",
-            )
-            return
-
-        for row in range(self.auth_result_table.rowCount()):
-            self.auth_result_table.setItem(row, 3, QTableWidgetItem("pending firmware auth driver"))
-
-        QMessageBox.information(
-            self,
-            "Firmware support required",
-            (
-                f"{len(keys)} keys are valid and ready, but the ESP firmware does not yet "
-                "implement MIFARE Classic Crypto1 authentication. Next step is the "
-                "auth.test_keys command on firmware."
-            ),
-        )
 
     def populate_hex_table(
         self,
