@@ -1273,7 +1273,8 @@ bool writeMifareClassicBlockFresh(
 
   uint8_t verifyData[MIFARE_CLASSIC_BLOCK_SIZE] = {0};
   bool authenticated = false;
-  if (!readMifareClassicBlockFresh(blockAddress, keyType, key, uid, 4, sak, verifyData, authenticated)) {
+  const uint8_t *expectedVerifyUid = blockAddress == 0 ? data : uid;
+  if (!readMifareClassicBlockFresh(blockAddress, keyType, key, expectedVerifyUid, 4, sak, verifyData, authenticated)) {
     return false;
   }
   for (uint8_t i = 0; i < MIFARE_CLASSIC_BLOCK_SIZE; ++i) {
