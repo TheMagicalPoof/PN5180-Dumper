@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+
+# Captured RFID tag data may contain real identifiers and payloads.
+captures/
+
+# Local IDE/editor state.
+.theia/
+.vscode/
+
+# Generated archives.
+*.zip
+
