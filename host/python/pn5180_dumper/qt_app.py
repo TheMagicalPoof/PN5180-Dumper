@@ -760,6 +760,12 @@ class MainWindow(QMainWindow):
             self.write_done += 1
         elif status != "skipped_protected":
             self.write_failures.append(f"{block}:{status}")
+            if block == "0":
+                self.write_queue = []
+                self.write_running = False
+                self.write_button.setEnabled(bool(self.write_bytes))
+                self.status_label.setText(f"UID block 0 failed ({status}); write stopped")
+                return
         self.status_label.setText(f"Writing {self.write_done}/{self.write_total} blocks...")
         self.send_next_write_block()
 

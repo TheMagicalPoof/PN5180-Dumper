@@ -1284,6 +1284,76 @@ bool writeMifareClassicBlockFresh(
   return true;
 }
 
+bool readMagicAck(const uint8_t *command, uint8_t len, uint8_t validBits) {
+  uint8_t ack[1] = {0x00};
+  if (!pn5180TransceiveRfSafe(command, len, validBits, 1, ack, 50)) {
+    return false;
+  }
+  return (ack[0] & 0x0F) == 0x0A;
+}
+
+bool unlockMifareClassicMagicBackdoor() {
+  if (!setupRfSafe(0x00, 0x80, false, F("ISO14443A"))) {
+    return false;
+  }
+
+  uint8_t response[10] = {0};
+  if (activateTypeASafe(response, 1) == 0) {
+    return false;
+  }
+  mifareHaltSafe();
+  delay(5);
+
+  pn5180WriteRegisterWithAndMaskSafe(CRC_RX_CONFIG, 0xFFFFFFFE);
+  pn5180WriteRegisterWithAndMaskSafe(CRC_TX_CONFIG, 0xFFFFFFFE);
+
+  uint8_t wakeCommand[1] = {0x40};
+  if (!readMagicAck(wakeCommand, sizeof(wakeCommand), 0x07)) {
+    pn5180WriteRegisterWithOrMaskSafe(CRC_RX_CONFIG, 0x01);
+    pn5180WriteRegisterWithOrMaskSafe(CRC_TX_CONFIG, 0x01);
+    return false;
+  }
+
+  uint8_t unlockCommand[1] = {0x43};
+  if (!readMagicAck(unlockCommand, sizeof(unlockCommand), 0x00)) {
+    pn5180WriteRegisterWithOrMaskSafe(CRC_RX_CONFIG, 0x01);
+    pn5180WriteRegisterWithOrMaskSafe(CRC_TX_CONFIG, 0x01);
+    return false;
+  }
+
+  pn5180WriteRegisterWithOrMaskSafe(CRC_RX_CONFIG, 0x01);
+  pn5180WriteRegisterWithOrMaskSafe(CRC_TX_CONFIG, 0x01);
+  return true;
+}
+
+bool writeMifareClassicMagicBlock0(const uint8_t data[MIFARE_CLASSIC_BLOCK_SIZE], bool verify) {
+  if (!unlockMifareClassicMagicBackdoor()) {
+    return false;
+  }
+  if (!mifareClassicWriteBlockSafe(0, data)) {
+    mifareHaltSafe();
+    return false;
+  }
+  mifareHaltSafe();
+
+  if (!verify) {
+    return true;
+  }
+
+  uint8_t sak = 0;
+  uint8_t verifyData[MIFARE_CLASSIC_BLOCK_SIZE] = {0};
+  bool authenticated = false;
+  if (!readMifareClassicBlockFresh(0, MIFARE_KEY_A, MIFARE_CLASSIC_KEYS[0], data, 4, sak, verifyData, authenticated)) {
+    return false;
+  }
+  for (uint8_t i = 0; i < MIFARE_CLASSIC_BLOCK_SIZE; ++i) {
+    if (verifyData[i] != data[i]) {
+      return false;
+    }
+  }
+  return true;
+}
+
 void handleMifareWriteCommand(const String &line) {
   int cursor = 0;
   String prefix = nextCommandToken(line, cursor);
@@ -1338,6 +1408,16 @@ void handleMifareWriteCommand(const String &line) {
         return;
       }
       delay(10);
+    }
+  }
+
+  if (blockValue == 0 && allowBlock0) {
+    for (uint8_t attempt = 0; attempt < 3; ++attempt) {
+      if (writeMifareClassicMagicBlock0(data, verify)) {
+        printWriteResult(static_cast<uint16_t>(blockValue), F("ok"), 'M');
+        return;
+      }
+      delay(20);
     }
   }
 
