@@ -1286,9 +1286,12 @@ bool writeMifareClassicBlockFresh(
 
 bool readMagicAck(const uint8_t *command, uint8_t len, uint8_t validBits) {
   uint8_t ack[1] = {0x00};
-  if (!pn5180TransceiveRfSafe(command, len, validBits, 1, ack, 50)) {
+  pn5180ClearIRQStatusSafe(0xFFFFFFFF);
+  if (!pn5180SendRfDataSafe(command, len, validBits)) {
     return false;
   }
+  delay(5);
+  pn5180ReadRfDataSafe(1, ack);
   return (ack[0] & 0x0F) == 0x0A;
 }
 
@@ -1326,32 +1329,46 @@ bool unlockMifareClassicMagicBackdoor() {
   return true;
 }
 
-bool writeMifareClassicMagicBlock0(const uint8_t data[MIFARE_CLASSIC_BLOCK_SIZE], bool verify) {
+uint8_t writeMifareClassicMagicBlock0(const uint8_t data[MIFARE_CLASSIC_BLOCK_SIZE], bool verify) {
   if (!unlockMifareClassicMagicBackdoor()) {
-    return false;
+    return 1;
   }
   if (!mifareClassicWriteBlockSafe(0, data)) {
     mifareHaltSafe();
-    return false;
+    return 2;
   }
   mifareHaltSafe();
 
   if (!verify) {
-    return true;
+    return 0;
   }
 
   uint8_t sak = 0;
   uint8_t verifyData[MIFARE_CLASSIC_BLOCK_SIZE] = {0};
   bool authenticated = false;
   if (!readMifareClassicBlockFresh(0, MIFARE_KEY_A, MIFARE_CLASSIC_KEYS[0], data, 4, sak, verifyData, authenticated)) {
-    return false;
+    return 3;
   }
   for (uint8_t i = 0; i < MIFARE_CLASSIC_BLOCK_SIZE; ++i) {
     if (verifyData[i] != data[i]) {
-      return false;
+      return 3;
     }
   }
-  return true;
+  return 0;
+}
+
+const __FlashStringHelper *magicWriteStatusText(uint8_t status) {
+  switch (status) {
+    case 1:
+      return F("magic_unlock_failed");
+    case 2:
+      return F("magic_write_failed");
+    case 3:
+      return F("magic_verify_failed");
+    case 0:
+    default:
+      return F("ok");
+  }
 }
 
 void handleMifareWriteCommand(const String &line) {
@@ -1413,8 +1430,13 @@ void handleMifareWriteCommand(const String &line) {
 
   if (blockValue == 0 && allowBlock0) {
     for (uint8_t attempt = 0; attempt < 3; ++attempt) {
-      if (writeMifareClassicMagicBlock0(data, verify)) {
+      uint8_t magicStatus = writeMifareClassicMagicBlock0(data, verify);
+      if (magicStatus == 0) {
         printWriteResult(static_cast<uint16_t>(blockValue), F("ok"), 'M');
+        return;
+      }
+      if (attempt == 2) {
+        printWriteResult(static_cast<uint16_t>(blockValue), magicWriteStatusText(magicStatus));
         return;
       }
       delay(20);
