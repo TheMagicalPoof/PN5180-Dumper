@@ -1447,6 +1447,12 @@ void handleMifareWriteCommand(const String &line) {
   printWriteResult(static_cast<uint16_t>(blockValue), F("failed"));
 }
 
+void handleMagicProbeCommand() {
+  Serial.print(F("PND1 MAGIC_RESULT gen1a="));
+  Serial.println(unlockMifareClassicMagicBackdoor() ? F("ok") : F("failed"));
+  mifareHaltSafe();
+}
+
 bool processSerialCommand() {
   if (!Serial.available()) {
     return false;
@@ -1468,6 +1474,10 @@ bool processSerialCommand() {
   }
   if (line.startsWith(F("PND1 WRITE"))) {
     handleMifareWriteCommand(line);
+    return true;
+  }
+  if (line == F("PND1 MAGIC_PROBE")) {
+    handleMagicProbeCommand();
     return true;
   }
   Serial.println(F("PND1 ERROR status=unknown_command"));

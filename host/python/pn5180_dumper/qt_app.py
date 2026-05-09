@@ -219,6 +219,8 @@ class MainWindow(QMainWindow):
         self.write_verify_check.setChecked(True)
         self.write_uid_block_check = QCheckBox("Write UID block 0 (magic only)")
         self.write_uid_block_check.setToolTip("Dangerous: only for UID-changeable magic cards.")
+        self.magic_probe_button = QPushButton("Probe magic UID")
+        self.magic_probe_button.setToolTip("Checks whether the current tag answers the Gen1A magic backdoor.")
         self.write_button = QPushButton("Write")
         self.write_button.setEnabled(False)
         self.write_button.setToolTip("Writes safe MIFARE Classic data blocks, skipping UID and trailer blocks")
@@ -300,6 +302,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.write_address_spin, 1, 1)
         layout.addWidget(self.write_verify_check, 1, 2, 1, 2)
         layout.addWidget(self.write_uid_block_check, 1, 4, 1, 2)
+        layout.addWidget(self.magic_probe_button, 1, 6)
         layout.addWidget(QLabel("Raw write buffer"), 2, 0, 1, 6)
         layout.addWidget(self.write_hex_table, 3, 0, 1, 6)
         layout.addWidget(self.write_button, 4, 0, 1, 6)
@@ -332,6 +335,7 @@ class MainWindow(QMainWindow):
         self.write_import_browse_button.clicked.connect(self.choose_write_import_path)
         self.write_load_button.clicked.connect(self.load_write_file)
         self.write_button.clicked.connect(self.start_write_dump)
+        self.magic_probe_button.clicked.connect(self.probe_magic_uid)
         self.port_combo.currentIndexChanged.connect(self.save_selected_port)
         self.stop_brute_button.clicked.connect(self.stop_brute)
         self.reset_button.clicked.connect(self.reset_session)
@@ -449,6 +453,8 @@ class MainWindow(QMainWindow):
             self.handle_brute_result(self._parse_fields(line))
         elif line.startswith("PND1 WRITE_RESULT"):
             self.handle_write_result(self._parse_fields(line))
+        elif line.startswith("PND1 MAGIC_RESULT"):
+            self.handle_magic_result(self._parse_fields(line))
         self.log_view.appendPlainText(line)
 
     def _parse_fields(self, line: str) -> dict[str, str]:
@@ -732,6 +738,14 @@ class MainWindow(QMainWindow):
         self.status_label.setText(f"Writing 0/{self.write_total} blocks...")
         self.send_next_write_block()
 
+    def probe_magic_uid(self) -> None:
+        if not self.worker:
+            self.start_capture(request_initial_dump=False)
+            if not self.worker:
+                return
+        self.worker.send_command("PND1 MAGIC_PROBE")
+        self.status_label.setText("Magic probe requested...")
+
     def send_next_write_block(self) -> None:
         if not self.write_running or not self.worker:
             return
@@ -768,6 +782,15 @@ class MainWindow(QMainWindow):
                 return
         self.status_label.setText(f"Writing {self.write_done}/{self.write_total} blocks...")
         self.send_next_write_block()
+
+    def handle_magic_result(self, fields: dict[str, str]) -> None:
+        gen1a = fields.get("gen1a", "unknown")
+        if gen1a == "ok":
+            self.status_label.setText("Magic probe: Gen1A backdoor is supported")
+        elif gen1a == "failed":
+            self.status_label.setText("Magic probe: Gen1A backdoor is not supported")
+        else:
+            self.status_label.setText(f"Magic probe: {gen1a}")
 
     def _is_mifare_classic_trailer_block(self, block: int) -> bool:
         if block < 128:
