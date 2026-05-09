@@ -1,0 +1,17 @@
+[project]
+name = "pn5180-dumper"
+version = "0.2.0"
+description = "Host tools for PN5180 Dumper"
+requires-python = ">=3.10"
+dependencies = [
+  "pyserial>=3.5",
+]
+
+[project.scripts]
+pn5180-dumper = "pn5180_dumper.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "host/python"}
+
+[tool.setuptools.packages.find]
+where = ["host/python"]

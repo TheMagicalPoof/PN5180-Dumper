@@ -1,8 +1,8 @@
 # PN5180 Dumper
 
-PN5180 Dumper captures RFID/NFC tag data with a PN5180 reader and a XIAO ESP32-S3 board.
+PN5180 Dumper is a PN5180-based RFID/NFC tool for scanning, identifying, reading, dumping, and eventually writing supported tags with an ESP32-S3 reader and host-side UI tools.
 
-The Arduino sketch scans the tag through the PN5180 module and prints structured records to the serial port. The Python utility listens to that serial output, detects complete records, and saves metadata plus binary and hex dump files when memory data is available.
+The current firmware still supports streaming captures over serial. The repository is now structured for a larger universal tool: ESP firmware command modules, a shared Python host library/CLI, and future Qt UI.
 
 ## Supported Tags
 
@@ -20,9 +20,12 @@ Known limitation: `iClass` exists in the bundled PN5180 library, but it currentl
 
 ## Files
 
-- `DumpInfo.ino` - Arduino sketch for PN5180 tag scanning and best-effort dumping.
-- `capture_dump.py` - Serial capture utility that saves complete dumps.
-- `run_capture_once.bat` - Windows helper that captures one complete dump and exits.
+- `firmware/pn5180_dumper/pn5180_dumper.ino` - ESP32-S3 Arduino firmware.
+- `host/python/pn5180_dumper/` - Python host package and CLI.
+- `docs/` - architecture, roadmap, and serial protocol notes.
+- `scripts/run_capture_once.bat` - Windows helper that captures one complete dump and exits.
+- `capture_dump.py` - compatibility wrapper for the legacy capture command.
+- `run_capture_once.bat` - compatibility wrapper for the legacy Windows helper.
 - `requirements.txt` - Python dependencies.
 
 ## Wiring
@@ -46,7 +49,7 @@ Install the Python dependency:
 pip install -r requirements.txt
 ```
 
-Flash `DumpInfo.ino` to the board, connect the board over USB, then run:
+Flash `firmware/pn5180_dumper/pn5180_dumper.ino` to the board, connect the board over USB, then run:
 
 ```powershell
 .\run_capture_once.bat
@@ -56,6 +59,14 @@ Or run the capture utility directly:
 
 ```powershell
 python capture_dump.py --auto-port --once
+```
+
+The new host CLI can list ports and run the same legacy capture path:
+
+```powershell
+$env:PYTHONPATH = "host/python"
+python -m pn5180_dumper.cli ports
+python -m pn5180_dumper.cli capture --auto-port --once
 ```
 
 If auto-detection cannot choose the port, pass it explicitly:
@@ -74,3 +85,11 @@ Each successful capture is saved under `captures/<timestamp>_<uid>/`:
 - `raw_serial.log` - full serial log from the board.
 
 `captures/` is ignored by git because real RFID dumps can contain private tag data.
+
+## Development Direction
+
+See:
+
+- `docs/ARCHITECTURE.md` - target firmware/host/UI structure.
+- `docs/SERIAL_PROTOCOL.md` - legacy stream format and planned command protocol V2.
+- `docs/ROADMAP.md` - phased implementation plan.

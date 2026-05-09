@@ -1,8 +1,8 @@
 PN5180 Dumper
 =============
 
-PN5180 Dumper scans RFID/NFC tags with a PN5180 reader and saves detected
-records from the Arduino serial output.
+PN5180 Dumper is being shaped into a universal PN5180 RFID/NFC tool for
+scanning, identifying, reading, dumping, and eventually writing supported tags.
 
 Supported tags
 --------------
@@ -17,12 +17,21 @@ the unified scanner for now.
 Files
 -----
 
+- firmware/pn5180_dumper/pn5180_dumper.ino
+  ESP32-S3 Arduino firmware.
+
+- host/python/pn5180_dumper/
+  Python host package and CLI.
+
+- docs/
+  Architecture, roadmap, and serial protocol notes.
+
 - capture_dump.py
-  Console utility that listens to the serial port, auto-detects complete tag
-  records in the Arduino output and saves them to files.
+  Compatibility wrapper for the legacy streaming capture utility.
 
 - run_capture_once.bat
-  Starts one capture in auto-port mode and exits after the first full dump.
+  Compatibility wrapper that starts one capture in auto-port mode and exits
+  after the first full dump.
 
 
 How to use
@@ -35,6 +44,12 @@ How to use
    or manually:
 
    python capture_dump.py --auto-port --once
+
+   or:
+
+   set PYTHONPATH=host\python
+   python -m pn5180_dumper.cli ports
+   python -m pn5180_dumper.cli capture --auto-port --once
 
 
 Result files
