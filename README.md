@@ -73,6 +73,7 @@ pip install -r requirements.txt -r requirements-qt.txt
 ```
 
 The Qt UI remembers the last selected serial port. If no saved port exists yet, it prefers a non-`COM1` port when available.
+The GUI always uses the firmware baud rate `460800` and stores captures in `captures/`.
 
 If auto-detection cannot choose the port, pass it explicitly:
 

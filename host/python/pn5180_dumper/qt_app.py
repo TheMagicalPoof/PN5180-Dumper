@@ -130,17 +130,9 @@ class MainWindow(QMainWindow):
         self.reader_indicator = QLabel()
         self.reader_state_label = QLabel("Reader: offline")
         self.port_combo = QComboBox()
-        self.refresh_button = QPushButton("Refresh")
-        self.baud_spin = QSpinBox()
-        self.baud_spin.setRange(1200, 2_000_000)
-        self.baud_spin.setValue(int(self.settings.value("connection/baud", DEFAULT_BAUD)))
-        self.baud_spin.setSingleStep(9600)
-
-        self.out_dir_edit = QLineEdit(str(self.settings.value("paths/output_dir", str(Path("captures")))))
-        self.browse_button = QPushButton("Browse")
         self.once_check = QCheckBox("Stop after first record")
 
-        self.connect_button = QPushButton("Start capture")
+        self.connect_button = QPushButton("Refresh ports and start")
         self.disconnect_button = QPushButton("Stop")
         self.disconnect_button.setEnabled(False)
 
@@ -201,21 +193,15 @@ class MainWindow(QMainWindow):
         reader_row.addStretch(1)
         connection_layout.addLayout(reader_row, 0, 0, 1, 6)
         connection_layout.addWidget(QLabel("Port"), 1, 0)
-        connection_layout.addWidget(self.port_combo, 1, 1)
-        connection_layout.addWidget(self.refresh_button, 1, 2)
-        connection_layout.addWidget(QLabel("Baud"), 1, 3)
-        connection_layout.addWidget(self.baud_spin, 1, 4)
-        connection_layout.addWidget(QLabel("Output"), 2, 0)
-        connection_layout.addWidget(self.out_dir_edit, 2, 1, 1, 4)
-        connection_layout.addWidget(self.browse_button, 2, 5)
-        connection_layout.addWidget(self.once_check, 3, 1)
+        connection_layout.addWidget(self.port_combo, 1, 1, 1, 5)
+        connection_layout.addWidget(self.once_check, 2, 1)
 
         button_row = QHBoxLayout()
         button_row.addWidget(self.connect_button)
         button_row.addWidget(self.disconnect_button)
         button_row.addStretch(1)
         button_row.addWidget(self.scan_button)
-        connection_layout.addLayout(button_row, 4, 0, 1, 6)
+        connection_layout.addLayout(button_row, 3, 0, 1, 6)
 
         devices_box = QGroupBox("Current device")
         devices_layout = QVBoxLayout(devices_box)
@@ -297,8 +283,6 @@ class MainWindow(QMainWindow):
         return table
 
     def _connect_signals(self) -> None:
-        self.refresh_button.clicked.connect(self.refresh_ports)
-        self.browse_button.clicked.connect(self.choose_out_dir)
         self.connect_button.clicked.connect(self.start_capture)
         self.disconnect_button.clicked.connect(self.stop_capture)
         self.read_export_browse_button.clicked.connect(self.choose_read_export_path)
@@ -329,12 +313,6 @@ class MainWindow(QMainWindow):
         if port:
             self.settings.setValue("connection/port", port)
 
-    def choose_out_dir(self) -> None:
-        selected = QFileDialog.getExistingDirectory(self, "Select capture directory", self.out_dir_edit.text())
-        if selected:
-            self.out_dir_edit.setText(selected)
-            self.settings.setValue("paths/output_dir", selected)
-
     def choose_read_export_path(self) -> None:
         selected, _ = QFileDialog.getSaveFileName(
             self,
@@ -359,17 +337,18 @@ class MainWindow(QMainWindow):
             self.load_write_file()
 
     def start_capture(self) -> None:
+        self.refresh_ports()
         port = self.port_combo.currentData()
         if not port:
             QMessageBox.warning(self, "No port", "Select a serial port first.")
             return
 
-        out_dir = Path(self.out_dir_edit.text().strip() or "captures")
+        out_dir = Path("captures")
         out_dir.mkdir(parents=True, exist_ok=True)
 
         self.worker = SerialCaptureWorker(
             port=port,
-            baud=self.baud_spin.value(),
+            baud=DEFAULT_BAUD,
             out_dir=out_dir,
             once=self.once_check.isChecked(),
         )
@@ -381,8 +360,6 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
         self.settings.setValue("connection/port", port)
-        self.settings.setValue("connection/baud", self.baud_spin.value())
-        self.settings.setValue("paths/output_dir", str(out_dir))
         self.connect_button.setEnabled(False)
         self.disconnect_button.setEnabled(True)
         self.status_label.setText("Connecting...")
@@ -512,8 +489,6 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:  # noqa: N802
         self.settings.setValue("connection/port", self.port_combo.currentData() or "")
-        self.settings.setValue("connection/baud", self.baud_spin.value())
-        self.settings.setValue("paths/output_dir", self.out_dir_edit.text())
         self.settings.setValue("paths/read_export", self.read_export_path_edit.text())
         self.settings.setValue("paths/write_import", self.write_import_path_edit.text())
         if self.worker:
