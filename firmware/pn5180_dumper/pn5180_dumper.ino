@@ -1290,7 +1290,6 @@ void handleMifareWriteCommand(const String &line) {
   String command = nextCommandToken(line, cursor);
   String blockToken = nextCommandToken(line, cursor);
   String dataToken = nextCommandToken(line, cursor);
-  String verifyToken = nextCommandToken(line, cursor);
 
   if (prefix != F("PND1") || command != F("WRITE") || blockToken.length() == 0 || dataToken.length() == 0) {
     Serial.println(F("PND1 WRITE_RESULT status=bad_command"));
@@ -1303,7 +1302,18 @@ void handleMifareWriteCommand(const String &line) {
     return;
   }
 
-  if (blockValue == 0 || mifareClassicIsTrailerBlock(static_cast<uint16_t>(blockValue))) {
+  bool verify = false;
+  bool allowBlock0 = false;
+  while (cursor < static_cast<int>(line.length())) {
+    String option = nextCommandToken(line, cursor);
+    if (option == F("VERIFY")) {
+      verify = true;
+    } else if (option == F("ALLOW0")) {
+      allowBlock0 = true;
+    }
+  }
+
+  if ((blockValue == 0 && !allowBlock0) || mifareClassicIsTrailerBlock(static_cast<uint16_t>(blockValue))) {
     printWriteResult(static_cast<uint16_t>(blockValue), F("skipped_protected"));
     return;
   }
@@ -1314,7 +1324,6 @@ void handleMifareWriteCommand(const String &line) {
     return;
   }
 
-  bool verify = verifyToken == F("VERIFY");
   for (uint8_t keyTypeIndex = 0; keyTypeIndex < 2; ++keyTypeIndex) {
     uint8_t keyType = keyTypeIndex == 0 ? MIFARE_KEY_A : MIFARE_KEY_B;
     char keyTypeChar = keyTypeIndex == 0 ? 'A' : 'B';

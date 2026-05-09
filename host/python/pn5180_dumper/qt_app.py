@@ -217,6 +217,8 @@ class MainWindow(QMainWindow):
         self.write_hex_table = self._create_hex_table()
         self.write_verify_check = QCheckBox("Verify after write")
         self.write_verify_check.setChecked(True)
+        self.write_uid_block_check = QCheckBox("Write UID block 0 (magic only)")
+        self.write_uid_block_check.setToolTip("Dangerous: only for UID-changeable magic cards.")
         self.write_button = QPushButton("Write")
         self.write_button.setEnabled(False)
         self.write_button.setToolTip("Writes safe MIFARE Classic data blocks, skipping UID and trailer blocks")
@@ -297,11 +299,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("Target block/page"), 1, 0)
         layout.addWidget(self.write_address_spin, 1, 1)
         layout.addWidget(self.write_verify_check, 1, 2, 1, 2)
+        layout.addWidget(self.write_uid_block_check, 1, 4, 1, 2)
         layout.addWidget(QLabel("Raw write buffer"), 2, 0, 1, 6)
         layout.addWidget(self.write_hex_table, 3, 0, 1, 6)
         layout.addWidget(self.write_button, 4, 0, 1, 6)
         layout.addWidget(
-            QLabel("Safe mode: UID block 0 and sector trailers with keys/access bits are skipped."),
+            QLabel("Safe mode skips sector trailers. UID block 0 is written only when explicitly enabled."),
             5,
             0,
             1,
@@ -668,11 +671,15 @@ class MainWindow(QMainWindow):
             return
 
         start_block = self.write_address_spin.value()
+        allow_uid_block = self.write_uid_block_check.isChecked()
         queue: list[tuple[int, bytes]] = []
         skipped: list[int] = []
         for source_block, offset in enumerate(range(0, len(self.write_bytes), 16)):
             target_block = start_block + source_block
-            if target_block == 0 or self._is_mifare_classic_trailer_block(target_block):
+            if target_block == 0 and not allow_uid_block:
+                skipped.append(target_block)
+                continue
+            if self._is_mifare_classic_trailer_block(target_block):
                 skipped.append(target_block)
                 continue
             queue.append((target_block, self.write_bytes[offset:offset + 16]))
@@ -694,6 +701,22 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.Yes:
             return
+
+        if allow_uid_block and any(block == 0 for block, _data in queue):
+            answer = QMessageBox.question(
+                self,
+                "Write UID block 0?",
+                (
+                    "You enabled writing block 0.\n\n"
+                    "This is only for UID-changeable magic cards. On a normal MIFARE Classic card it will fail; "
+                    "on some magic cards bad data can brick the card.\n\n"
+                    "Write block 0 anyway?"
+                ),
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
 
         if not self.worker:
             self.start_capture(request_initial_dump=False)
@@ -725,7 +748,8 @@ class MainWindow(QMainWindow):
 
         block, data = self.write_queue.pop(0)
         verify = " VERIFY" if self.write_verify_check.isChecked() else ""
-        self.worker.send_command(f"PND1 WRITE {block} {data.hex().upper()}{verify}")
+        allow_uid = " ALLOW0" if block == 0 and self.write_uid_block_check.isChecked() else ""
+        self.worker.send_command(f"PND1 WRITE {block} {data.hex().upper()}{verify}{allow_uid}")
 
     def handle_write_result(self, fields: dict[str, str]) -> None:
         if not self.write_running:
