@@ -1177,51 +1177,8 @@ MifareClassicDumpResult readMifareClassicWithDictionary(
   for (uint8_t sector = 0; sector < result.sectorCount; ++sector) {
     uint16_t firstBlock = mifareClassicSectorFirstBlock(sector);
     uint8_t sectorBlocks = mifareClassicSectorBlockCount(sector);
-    bool authenticated = false;
-    uint8_t authenticatedKeyType = 0;
-    uint8_t authenticatedKeyIndex = 0;
-
-    for (uint8_t keyTypeIndex = 0; keyTypeIndex < 2 && !authenticated; ++keyTypeIndex) {
-      uint8_t keyType = keyTypeIndex == 0 ? MIFARE_KEY_A : MIFARE_KEY_B;
-      for (uint8_t keyIndex = 0; keyIndex < MIFARE_CLASSIC_KEY_COUNT && !authenticated; ++keyIndex) {
-        if (mifareClassicAuthenticate(static_cast<uint8_t>(firstBlock), keyType, MIFARE_CLASSIC_KEYS[keyIndex], uid)) {
-          authenticated = true;
-          authenticatedKeyType = keyType;
-          authenticatedKeyIndex = keyIndex;
-          break;
-        }
-
-        delay(4);
-        reselectIso14443A(uid, uidLength, activeSak);
-      }
-    }
-
-    if (!authenticated) {
-      Serial.print(F("INFO mfclassic_auth sector="));
-      Serial.print(sector);
-      Serial.print(F(" status=failed last_status="));
-      printHexByte(lastMifareAuthStatus);
-      Serial.println();
-      for (uint8_t offset = 0; offset < sectorBlocks; ++offset) {
-        uint16_t block = firstBlock + offset;
-        if (block < result.blockCount) {
-          blockStatus[block] = MIFARE_BLOCK_STATUS_KEY_MISSING;
-        }
-      }
-      reselectIso14443A(uid, uidLength, activeSak);
-      continue;
-    }
-
-    ++result.sectorsAuthenticated;
-    Serial.print(F("INFO mfclassic_auth sector="));
-    Serial.print(sector);
-    Serial.print(F(" key_type="));
-    Serial.print(authenticatedKeyType == MIFARE_KEY_A ? 'A' : 'B');
-    Serial.print(F(" key_index="));
-    Serial.print(authenticatedKeyIndex);
-    Serial.print(F(" key="));
-    printMifareKey(MIFARE_CLASSIC_KEYS[authenticatedKeyIndex]);
-    Serial.println(F(" status=ok"));
+    bool sectorAuthenticated = false;
+    bool sectorLogged = false;
 
     for (uint8_t offset = 0; offset < sectorBlocks; ++offset) {
       uint16_t block = firstBlock + offset;
@@ -1231,12 +1188,39 @@ MifareClassicDumpResult readMifareClassicWithDictionary(
 
       uint8_t buffer[MIFARE_CLASSIC_BLOCK_SIZE] = {0};
       bool blockOk = false;
-      for (uint8_t attempt = 0; attempt < 1 && !blockOk; ++attempt) {
-        if (offset > 0 || attempt > 0) {
+      bool blockAuthenticated = false;
+      uint8_t authenticatedKeyType = 0;
+      uint8_t authenticatedKeyIndex = 0;
+
+      for (uint8_t keyTypeIndex = 0; keyTypeIndex < 2 && !blockOk; ++keyTypeIndex) {
+        uint8_t keyType = keyTypeIndex == 0 ? MIFARE_KEY_A : MIFARE_KEY_B;
+        for (uint8_t keyIndex = 0; keyIndex < MIFARE_CLASSIC_KEY_COUNT && !blockOk; ++keyIndex) {
           reselectIso14443A(uid, uidLength, activeSak);
-          mifareClassicAuthenticate(static_cast<uint8_t>(block), authenticatedKeyType, MIFARE_CLASSIC_KEYS[authenticatedKeyIndex], uid);
+          if (!mifareClassicAuthenticate(static_cast<uint8_t>(block), keyType, MIFARE_CLASSIC_KEYS[keyIndex], uid)) {
+            delay(4);
+            continue;
+          }
+
+          blockAuthenticated = true;
+          sectorAuthenticated = true;
+          authenticatedKeyType = keyType;
+          authenticatedKeyIndex = keyIndex;
+          if (!sectorLogged) {
+            ++result.sectorsAuthenticated;
+            Serial.print(F("INFO mfclassic_auth sector="));
+            Serial.print(sector);
+            Serial.print(F(" key_type="));
+            Serial.print(authenticatedKeyType == MIFARE_KEY_A ? 'A' : 'B');
+            Serial.print(F(" key_index="));
+            Serial.print(authenticatedKeyIndex);
+            Serial.print(F(" key="));
+            printMifareKey(MIFARE_CLASSIC_KEYS[authenticatedKeyIndex]);
+            Serial.println(F(" status=ok"));
+            sectorLogged = true;
+          }
+          blockOk = mifareClassicReadBlockSafe(static_cast<uint8_t>(block), buffer);
+          delay(4);
         }
-        blockOk = mifareClassicReadBlockSafe(static_cast<uint8_t>(block), buffer);
       }
 
       if (blockOk) {
@@ -1246,9 +1230,21 @@ MifareClassicDumpResult readMifareClassicWithDictionary(
         blockStatus[block] = MIFARE_BLOCK_STATUS_READ;
         ++result.blocksRead;
       } else {
-        Serial.print(F("INFO mfclassic_read_failed block="));
-        Serial.println(block);
+        if (blockAuthenticated) {
+          Serial.print(F("INFO mfclassic_read_failed block="));
+          Serial.println(block);
+        } else {
+          blockStatus[block] = MIFARE_BLOCK_STATUS_KEY_MISSING;
+        }
       }
+    }
+
+    if (!sectorAuthenticated) {
+      Serial.print(F("INFO mfclassic_auth sector="));
+      Serial.print(sector);
+      Serial.print(F(" status=failed last_status="));
+      printHexByte(lastMifareAuthStatus);
+      Serial.println();
     }
 
     delay(4);
