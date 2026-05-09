@@ -72,6 +72,8 @@ pip install -r requirements.txt -r requirements-qt.txt
 .\scripts\run_qt_app.bat
 ```
 
+The Qt UI remembers the last selected serial port. If no saved port exists yet, it prefers a non-`COM1` port when available.
+
 If auto-detection cannot choose the port, pass it explicitly:
 
 ```powershell
