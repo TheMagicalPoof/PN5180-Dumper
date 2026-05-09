@@ -5,6 +5,7 @@ def test_default_keys_are_valid_and_unique() -> None:
     parsed = parse_key_list("\n".join(DEFAULT_MIFARE_CLASSIC_KEYS))
     assert parsed == DEFAULT_MIFARE_CLASSIC_KEYS
     assert len(parsed) == len(set(parsed))
+    assert len(parsed) == 100
 
 
 def test_parse_key_list_normalizes_and_deduplicates() -> None:
@@ -21,4 +22,3 @@ def test_normalize_rejects_wrong_length() -> None:
         assert "12 hex chars" in str(exc)
     else:
         raise AssertionError("Expected ValueError")
-
