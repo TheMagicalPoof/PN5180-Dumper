@@ -41,9 +41,11 @@ class DumpCapture:
         self.metadata: TagMetadata | None = None
         self.compact_hex_lines: list[str] = []
         self.compact_hex_display_lines: list[str] = []
+        self.compact_block_statuses: list[str] = []
         self._expect_metadata = False
         self._in_compact_hex = False
         self._in_dump = False
+        self._pending_block_status = "OK"
 
     def reset(self) -> None:
         self.__init__()
@@ -56,8 +58,10 @@ class DumpCapture:
             self.metadata = None
             self.compact_hex_lines = []
             self.compact_hex_display_lines = []
+            self.compact_block_statuses = []
             self._expect_metadata = False
             self._in_compact_hex = False
+            self._pending_block_status = "OK"
             return False
 
         if line == NEW_DUMP_END:
@@ -75,6 +79,8 @@ class DumpCapture:
             self._in_compact_hex = True
             self.compact_hex_lines = []
             self.compact_hex_display_lines = []
+            self.compact_block_statuses = []
+            self._pending_block_status = "OK"
             return False
 
         if line == NEW_COMPACT_END:
@@ -93,6 +99,8 @@ class DumpCapture:
         if line == COMPACT_START:
             self._in_compact_hex = True
             self.compact_hex_lines = []
+            self.compact_block_statuses = []
+            self._pending_block_status = "OK"
             return False
 
         if line == COMPACT_END:
@@ -100,10 +108,22 @@ class DumpCapture:
             return self.is_complete()
 
         if self._in_compact_hex:
+            if line.startswith("INFO mfclassic_block_key_missing "):
+                self._pending_block_status = "MS"
+                return False
+            if line.startswith("INFO mfclassic_block_missing "):
+                self._pending_block_status = "NN"
+                return False
+            if line.startswith("INFO mfclassic_block ") or line.startswith("INFO typea_read "):
+                self._pending_block_status = "OK"
+                return False
+
             compact = normalize_hex_line(line)
             if compact:
                 self.compact_hex_lines.append(compact)
                 self.compact_hex_display_lines.append(spaced_hex_line(compact))
+                self.compact_block_statuses.append(self._pending_block_status)
+                self._pending_block_status = "OK"
             return False
 
         if line.startswith("INFO ") or line.startswith("ERROR ") or line.startswith("READER_READY"):
@@ -270,6 +290,10 @@ def save_capture(capture: DumpCapture, out_dir: Path) -> Path:
         (target_dir / "dump.hex").write_text(
             "\n".join(capture.compact_hex_display_lines) + "\n",
             encoding="ascii",
+        )
+        (target_dir / "block_status.json").write_text(
+            json.dumps(capture.compact_block_statuses, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
     (target_dir / "raw_serial.log").write_text(
         "\n".join(capture.raw_lines) + "\n",

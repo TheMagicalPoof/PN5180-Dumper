@@ -5,7 +5,8 @@ from pathlib import Path
 import serial
 from serial.tools import list_ports
 
-from PyQt5.QtCore import QSettings, QThread, pyqtSignal
+from PyQt5.QtCore import QSettings, Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QBrush, QColor, QKeySequence
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -35,6 +36,30 @@ from .keys import DEFAULT_MIFARE_CLASSIC_KEYS, parse_key_list
 
 
 DEFAULT_BAUD = 460800
+
+
+class HexTableWidget(QTableWidget):
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.matches(QKeySequence.Copy):
+            self.copy_selection_to_clipboard()
+            return
+        super().keyPressEvent(event)
+
+    def copy_selection_to_clipboard(self) -> None:
+        ranges = self.selectedRanges()
+        if not ranges:
+            return
+
+        selected = ranges[0]
+        rows: list[str] = []
+        for row in range(selected.topRow(), selected.bottomRow() + 1):
+            values: list[str] = []
+            for column in range(selected.leftColumn(), selected.rightColumn() + 1):
+                item = self.item(row, column)
+                values.append(item.text() if item else "")
+            rows.append("\t".join(values))
+
+        QApplication.clipboard().setText("\n".join(rows))
 
 
 class SerialCaptureWorker(QThread):
@@ -100,6 +125,7 @@ class SerialCaptureWorker(QThread):
                             "num_blocks": metadata.num_blocks if metadata else None,
                             "has_dump": bool(capture.compact_hex_lines),
                             "byte_length": sum(len(bytes.fromhex(line)) for line in capture.compact_hex_lines),
+                            "block_statuses": list(capture.compact_block_statuses),
                         }
                         if metadata:
                             payload.update(metadata.extra)
@@ -306,10 +332,11 @@ class MainWindow(QMainWindow):
         return tab
 
     def _create_hex_table(self) -> QTableWidget:
-        table = QTableWidget(0, 17)
+        table = HexTableWidget(0, 17)
         table.setHorizontalHeaderLabels(["Offset"] + [f"{i:02X}" for i in range(16)])
         table.setSelectionBehavior(QAbstractItemView.SelectItems)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.setToolTip("Select cells and press Ctrl+C to copy the visible table text.")
         table.horizontalHeader().setStretchLastSection(True)
         return table
 
@@ -462,7 +489,8 @@ class MainWindow(QMainWindow):
         dump_path = self.current_folder / "dump.bin"
         if dump_path.exists():
             self.current_dump_bytes = dump_path.read_bytes()
-            self.populate_hex_table(self.read_hex_table, self.current_dump_bytes)
+            statuses = metadata.get("block_statuses") if isinstance(metadata.get("block_statuses"), list) else None
+            self.populate_hex_table(self.read_hex_table, self.current_dump_bytes, statuses)
             self.read_export_button.setEnabled(True)
             default_export = self.read_export_path_edit.text().strip()
             if not default_export:
@@ -563,16 +591,28 @@ class MainWindow(QMainWindow):
             ),
         )
 
-    def populate_hex_table(self, table: QTableWidget, data: bytes) -> None:
+    def populate_hex_table(self, table: QTableWidget, data: bytes, block_statuses: list[str] | None = None) -> None:
         row_count = (len(data) + 15) // 16
         table.setRowCount(row_count)
         for row in range(row_count):
             offset = row * 16
             table.setItem(row, 0, QTableWidgetItem(f"{offset:08X}"))
+            status = block_statuses[row] if block_statuses and row < len(block_statuses) else "OK"
             for column in range(16):
                 index = offset + column
                 value = f"{data[index]:02X}" if index < len(data) else ""
-                table.setItem(row, column + 1, QTableWidgetItem(value))
+                item = QTableWidgetItem(value)
+                if status == "NN":
+                    item.setText("NN")
+                    item.setBackground(QBrush(QColor("#ffd6d6")))
+                    item.setForeground(QBrush(QColor("#9b1c1c")))
+                    item.setToolTip("NN: block was authenticated but not read successfully")
+                elif status == "MS":
+                    item.setText("MS")
+                    item.setBackground(QBrush(QColor("#fff2b8")))
+                    item.setForeground(QBrush(QColor("#7a5200")))
+                    item.setToolTip("MS: sector key is missing from the current dictionary")
+                table.setItem(row, column + 1, item)
         table.resizeColumnsToContents()
 
     def _format_current_device(self, metadata: dict, folder: str) -> str:

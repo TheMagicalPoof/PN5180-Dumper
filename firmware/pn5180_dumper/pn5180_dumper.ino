@@ -36,6 +36,9 @@ static constexpr uint32_t PN5180_BUSY_TIMEOUT_MS = 40;
 static constexpr uint32_t PN5180_RESET_TIMEOUT_MS = 250;
 static constexpr uint32_t PN5180_RF_ON_TIMEOUT_MS = 250;
 static constexpr uint32_t MIFARE_CLASSIC_READ_TIMEOUT_MS = 45;
+static constexpr uint8_t MIFARE_BLOCK_STATUS_READ = 1;
+static constexpr uint8_t MIFARE_BLOCK_STATUS_NOT_READ = 2;
+static constexpr uint8_t MIFARE_BLOCK_STATUS_KEY_MISSING = 3;
 
 PN5180ISO15693 nfc15693(PN5180_NSS_PIN, PN5180_BUSY_PIN, PN5180_RST_PIN);
 PN5180ISO14443 nfc14443(PN5180_NSS_PIN, PN5180_BUSY_PIN, PN5180_RST_PIN);
@@ -912,13 +915,13 @@ MifareClassicDumpResult readMifareClassicWithDictionary(
     uint8_t uidLength,
     uint8_t sak,
     uint8_t dump[MIFARE_CLASSIC_MAX_BLOCKS][MIFARE_CLASSIC_BLOCK_SIZE],
-    bool blockRead[MIFARE_CLASSIC_MAX_BLOCKS]) {
+    uint8_t blockStatus[MIFARE_CLASSIC_MAX_BLOCKS]) {
   MifareClassicDumpResult result;
   result.blockCount = mifareClassicBlockCount(sak);
   result.sectorCount = mifareClassicSectorCount(sak);
 
   for (uint16_t block = 0; block < MIFARE_CLASSIC_MAX_BLOCKS; ++block) {
-    blockRead[block] = false;
+    blockStatus[block] = MIFARE_BLOCK_STATUS_NOT_READ;
     for (uint8_t i = 0; i < MIFARE_CLASSIC_BLOCK_SIZE; ++i) {
       dump[block][i] = 0;
     }
@@ -963,6 +966,12 @@ MifareClassicDumpResult readMifareClassicWithDictionary(
       Serial.print(F(" status=failed last_status="));
       printHexByte(lastMifareAuthStatus);
       Serial.println();
+      for (uint8_t offset = 0; offset < sectorBlocks; ++offset) {
+        uint16_t block = firstBlock + offset;
+        if (block < result.blockCount) {
+          blockStatus[block] = MIFARE_BLOCK_STATUS_KEY_MISSING;
+        }
+      }
       reselectIso14443A(uid, uidLength, activeSak);
       continue;
     }
@@ -998,7 +1007,7 @@ MifareClassicDumpResult readMifareClassicWithDictionary(
         for (uint8_t i = 0; i < MIFARE_CLASSIC_BLOCK_SIZE; ++i) {
           dump[block][i] = buffer[i];
         }
-        blockRead[block] = true;
+        blockStatus[block] = MIFARE_BLOCK_STATUS_READ;
         ++result.blocksRead;
       } else {
         Serial.print(F("INFO mfclassic_read_failed block="));
@@ -1108,7 +1117,7 @@ bool dumpIso14443AIfPresent() {
   uint8_t readCount = 0;
   const bool authRequired = isMifareClassicSak(sak);
   static uint8_t classicDump[MIFARE_CLASSIC_MAX_BLOCKS][MIFARE_CLASSIC_BLOCK_SIZE];
-  static bool classicBlockRead[MIFARE_CLASSIC_MAX_BLOCKS];
+  static uint8_t classicBlockStatus[MIFARE_CLASSIC_MAX_BLOCKS];
   MifareClassicDumpResult classicResult;
 
   Serial.print(F("TAG_DETECTED type=ISO14443A protocol=ISO14443A uid="));
@@ -1124,7 +1133,7 @@ bool dumpIso14443AIfPresent() {
   Serial.println(classifyIso14443A(sak));
 
   if (authRequired) {
-    classicResult = readMifareClassicWithDictionary(uid, uidLength, sak, classicDump, classicBlockRead);
+    classicResult = readMifareClassicWithDictionary(uid, uidLength, sak, classicDump, classicBlockStatus);
   } else {
     for (uint16_t address = 0; readCount < MAX_ISO14443A_READ_COMMANDS && address < 255; address += readStep) {
       uint8_t buffer[16] = {0};
@@ -1194,7 +1203,11 @@ bool dumpIso14443AIfPresent() {
     Serial.println(F("COMPACT_BEGIN"));
     uint8_t emptyBlock[MIFARE_CLASSIC_BLOCK_SIZE] = {0};
     for (uint16_t block = 0; block < classicResult.blockCount; ++block) {
-      if (!classicBlockRead[block]) {
+      if (classicBlockStatus[block] == MIFARE_BLOCK_STATUS_KEY_MISSING) {
+        Serial.print(F("INFO mfclassic_block_key_missing block="));
+        Serial.println(block);
+        printHexLine(emptyBlock, MIFARE_CLASSIC_BLOCK_SIZE);
+      } else if (classicBlockStatus[block] == MIFARE_BLOCK_STATUS_NOT_READ) {
         Serial.print(F("INFO mfclassic_block_missing block="));
         Serial.println(block);
         printHexLine(emptyBlock, MIFARE_CLASSIC_BLOCK_SIZE);
