@@ -170,7 +170,6 @@ class MainWindow(QMainWindow):
         self.brute_checked = 0
         self.brute_current_block: int | None = None
         self.brute_running = False
-        self.restart_after_reset = False
 
         self.setWindowTitle(f"PN5180 Dumper Qt5 v{__version__}")
         self.resize(1080, 720)
@@ -180,7 +179,7 @@ class MainWindow(QMainWindow):
         self.port_combo = QComboBox()
         self.once_check = QCheckBox("Stop after first record")
 
-        self.connect_button = QPushButton("Refresh ports and start")
+        self.connect_button = QPushButton("Refresh ports and read once")
         self.disconnect_button = QPushButton("Stop")
         self.disconnect_button.setEnabled(False)
 
@@ -207,9 +206,8 @@ class MainWindow(QMainWindow):
         self.read_export_button = QPushButton("Export dump")
         self.read_export_button.setEnabled(False)
         self.read_hex_table = self._create_hex_table(action_columns=True)
-        self.read_button = QPushButton("Read")
-        self.read_button.setEnabled(False)
-        self.read_button.setToolTip("Requires firmware command protocol V2")
+        self.read_button = QPushButton("Read once")
+        self.read_button.setToolTip("Sends one explicit PND1 DUMP command to the reader")
         self.stop_brute_button = QPushButton("Stop Brute")
         self.stop_brute_button.setEnabled(True)
         self.reset_button = QPushButton("RESET")
@@ -307,7 +305,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("Raw dump"), 2, 0, 1, 6)
         layout.addWidget(self.read_hex_table, 3, 0, 1, 6)
         layout.addWidget(
-            QLabel("Read will become active after firmware command protocol V2 is implemented."),
+            QLabel("Firmware is command-driven: no cyclic reads, use Read once for a new dump."),
             4,
             0,
             1,
@@ -370,8 +368,9 @@ class MainWindow(QMainWindow):
         return table
 
     def _connect_signals(self) -> None:
-        self.connect_button.clicked.connect(self.start_capture)
+        self.connect_button.clicked.connect(lambda _checked=False: self.start_capture(request_initial_dump=True))
         self.disconnect_button.clicked.connect(self.stop_capture)
+        self.read_button.clicked.connect(lambda _checked=False: self.request_dump_once())
         self.read_export_browse_button.clicked.connect(self.choose_read_export_path)
         self.read_export_button.clicked.connect(self.export_current_dump)
         self.write_import_browse_button.clicked.connect(self.choose_write_import_path)
@@ -427,7 +426,7 @@ class MainWindow(QMainWindow):
             self.settings.setValue("paths/write_import", selected)
             self.load_write_file()
 
-    def start_capture(self) -> None:
+    def start_capture(self, request_initial_dump: bool = True) -> None:
         self.refresh_ports()
         port = self.port_combo.currentData()
         if not port:
@@ -454,6 +453,15 @@ class MainWindow(QMainWindow):
         self.connect_button.setEnabled(False)
         self.disconnect_button.setEnabled(True)
         self.status_label.setText("Connecting...")
+        if request_initial_dump:
+            self.worker.send_command("PND1 DUMP")
+
+    def request_dump_once(self) -> None:
+        if not self.worker:
+            self.start_capture(request_initial_dump=True)
+            return
+        self.worker.send_command("PND1 DUMP")
+        self.status_label.setText("Read requested")
 
     def stop_capture(self) -> None:
         if self.worker:
@@ -465,9 +473,6 @@ class MainWindow(QMainWindow):
         self.connect_button.setEnabled(True)
         self.disconnect_button.setEnabled(False)
         self._set_reader_online(False)
-        if self.restart_after_reset:
-            self.restart_after_reset = False
-            self.start_capture()
 
     def append_log(self, line: str) -> None:
         self._set_reader_online(True)
@@ -553,7 +558,7 @@ class MainWindow(QMainWindow):
     def start_brute_for_block(self, block: int) -> None:
         if not self.worker:
             self.once_check.setChecked(False)
-            self.start_capture()
+            self.start_capture(request_initial_dump=False)
             if not self.worker:
                 QMessageBox.information(self, "Serial is stopped", "Start capture first and keep the port connected.")
                 return
@@ -583,7 +588,6 @@ class MainWindow(QMainWindow):
         self.status_label.setText("Brute stopped")
 
     def reset_session(self) -> None:
-        was_running = self.worker is not None
         self.brute_running = False
         self.brute_queue = []
         self.brute_total = 0
@@ -598,13 +602,7 @@ class MainWindow(QMainWindow):
         self.read_export_button.setEnabled(False)
         self._set_tag_online(False)
         self.log_view.clear()
-
-        if was_running and self.worker:
-            self.restart_after_reset = True
-            self.worker.stop()
-            self.status_label.setText("Resetting connection...")
-        else:
-            self.status_label.setText("Reset")
+        self.status_label.setText("Reset")
 
     def send_next_brute_attempt(self) -> None:
         if not self.brute_running or not self.worker:

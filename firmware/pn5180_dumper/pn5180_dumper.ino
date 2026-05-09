@@ -1132,6 +1132,12 @@ bool processSerialCommand() {
   if (line.length() == 0) {
     return false;
   }
+  if (line == F("PND1 DUMP")) {
+    if (!(dumpIso14443AIfPresent() || dumpIso15693IfPresent() || dumpFeliCaIfPresent())) {
+      Serial.println(F("INFO no_card"));
+    }
+    return true;
+  }
   if (line.startsWith(F("PND1 BRUTE"))) {
     handleMifareBruteCommand(line);
     return true;
@@ -1501,15 +1507,6 @@ void setup() {
 }
 
 void loop() {
-  if (processSerialCommand()) {
-    return;
-  }
-
-  if (dumpIso14443AIfPresent() || dumpIso15693IfPresent() || dumpFeliCaIfPresent()) {
-    delay(3000);
-    return;
-  }
-
-  Serial.println(F("INFO no_card"));
-  delay(500);
+  processSerialCommand();
+  delay(5);
 }
