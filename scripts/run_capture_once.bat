@@ -4,7 +4,8 @@ cd /d "%~dp0"
 cd ..
 
 echo Starting dump capture...
-python capture_dump.py --auto-port --once
+set PYTHONPATH=host\python
+python -m pn5180_dumper.cli capture --auto-port --once
 
 echo.
 if errorlevel 1 (

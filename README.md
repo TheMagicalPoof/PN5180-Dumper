@@ -24,8 +24,6 @@ Known limitation: `iClass` exists in the bundled PN5180 library, but it currentl
 - `host/python/pn5180_dumper/` - Python host package and CLI.
 - `docs/` - architecture, roadmap, and serial protocol notes.
 - `scripts/run_capture_once.bat` - Windows helper that captures one complete dump and exits.
-- `capture_dump.py` - compatibility wrapper for the legacy capture command.
-- `run_capture_once.bat` - compatibility wrapper for the legacy Windows helper.
 - `requirements.txt` - Python dependencies.
 
 ## Wiring
@@ -52,16 +50,10 @@ pip install -r requirements.txt
 Flash `firmware/pn5180_dumper/pn5180_dumper.ino` to the board, connect the board over USB, then run:
 
 ```powershell
-.\run_capture_once.bat
+.\scripts\run_capture_once.bat
 ```
 
-Or run the capture utility directly:
-
-```powershell
-python capture_dump.py --auto-port --once
-```
-
-The new host CLI can list ports and run the same legacy capture path:
+The host CLI can list ports and run the current streaming capture path:
 
 ```powershell
 $env:PYTHONPATH = "host/python"
