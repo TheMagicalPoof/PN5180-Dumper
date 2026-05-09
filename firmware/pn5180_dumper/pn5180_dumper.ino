@@ -36,6 +36,7 @@ static constexpr uint32_t PN5180_BUSY_TIMEOUT_MS = 40;
 static constexpr uint32_t PN5180_RESET_TIMEOUT_MS = 250;
 static constexpr uint32_t PN5180_RF_ON_TIMEOUT_MS = 250;
 static constexpr uint32_t MIFARE_CLASSIC_READ_TIMEOUT_MS = 45;
+static constexpr uint8_t MIFARE_CLASSIC_BRUTE_READ_RETRIES = 3;
 static constexpr uint8_t MIFARE_BLOCK_STATUS_READ = 1;
 static constexpr uint8_t MIFARE_BLOCK_STATUS_NOT_READ = 2;
 static constexpr uint8_t MIFARE_BLOCK_STATUS_KEY_MISSING = 3;
@@ -995,6 +996,147 @@ void mifareHaltSafe() {
   pn5180WriteRegisterWithAndMaskSafe(SYSTEM_CONFIG, 0xFFFFFFF8);
 }
 
+int hexNibble(char ch) {
+  if (ch >= '0' && ch <= '9') {
+    return ch - '0';
+  }
+  if (ch >= 'a' && ch <= 'f') {
+    return ch - 'a' + 10;
+  }
+  if (ch >= 'A' && ch <= 'F') {
+    return ch - 'A' + 10;
+  }
+  return -1;
+}
+
+bool parseMifareKeyText(const String &text, uint8_t key[6]) {
+  if (text.length() != 12) {
+    return false;
+  }
+  for (uint8_t i = 0; i < 6; ++i) {
+    int high = hexNibble(text[i * 2]);
+    int low = hexNibble(text[i * 2 + 1]);
+    if (high < 0 || low < 0) {
+      return false;
+    }
+    key[i] = static_cast<uint8_t>((high << 4) | low);
+  }
+  return true;
+}
+
+String nextCommandToken(const String &line, int &cursor) {
+  while (cursor < static_cast<int>(line.length()) && line[cursor] == ' ') {
+    ++cursor;
+  }
+  int start = cursor;
+  while (cursor < static_cast<int>(line.length()) && line[cursor] != ' ') {
+    ++cursor;
+  }
+  return line.substring(start, cursor);
+}
+
+void printBruteResult(uint8_t block, char keyType, const uint8_t key[6], const __FlashStringHelper *status) {
+  Serial.print(F("PND1 BRUTE_RESULT block="));
+  Serial.print(block);
+  Serial.print(F(" key_type="));
+  Serial.print(keyType);
+  Serial.print(F(" key="));
+  printMifareKey(key);
+  Serial.print(F(" status="));
+  Serial.println(status);
+}
+
+void printBruteOkResult(uint8_t block, char keyType, const uint8_t key[6], const uint8_t data[16]) {
+  Serial.print(F("PND1 BRUTE_RESULT block="));
+  Serial.print(block);
+  Serial.print(F(" key_type="));
+  Serial.print(keyType);
+  Serial.print(F(" key="));
+  printMifareKey(key);
+  Serial.print(F(" status=ok data="));
+  printHexCompact(data, MIFARE_CLASSIC_BLOCK_SIZE);
+  Serial.println();
+}
+
+void handleMifareBruteCommand(const String &line) {
+  int cursor = 0;
+  String prefix = nextCommandToken(line, cursor);
+  String command = nextCommandToken(line, cursor);
+  String blockToken = nextCommandToken(line, cursor);
+  String keyTypeToken = nextCommandToken(line, cursor);
+  String keyToken = nextCommandToken(line, cursor);
+
+  if (prefix != F("PND1") || command != F("BRUTE") || blockToken.length() == 0 || keyTypeToken.length() == 0) {
+    Serial.println(F("PND1 BRUTE_RESULT status=bad_command"));
+    return;
+  }
+
+  int blockValue = blockToken.toInt();
+  if (blockValue < 0 || blockValue > 255) {
+    Serial.println(F("PND1 BRUTE_RESULT status=bad_block"));
+    return;
+  }
+
+  char keyTypeChar = keyTypeToken[0] == 'B' || keyTypeToken[0] == 'b' ? 'B' : 'A';
+  uint8_t keyType = keyTypeChar == 'B' ? MIFARE_KEY_B : MIFARE_KEY_A;
+  uint8_t key[6] = {0};
+  if (!parseMifareKeyText(keyToken, key)) {
+    Serial.println(F("PND1 BRUTE_RESULT status=bad_key"));
+    return;
+  }
+
+  uint8_t data[MIFARE_CLASSIC_BLOCK_SIZE] = {0};
+  for (uint8_t attempt = 1; attempt <= MIFARE_CLASSIC_BRUTE_READ_RETRIES; ++attempt) {
+    if (!setupRfSafe(0x00, 0x80, false, F("ISO14443A"))) {
+      continue;
+    }
+
+    uint8_t response[10] = {0};
+    uint8_t uidLength = activateTypeASafe(response, 1);
+    if (uidLength == 0) {
+      continue;
+    }
+    if (uidLength != 4) {
+      printBruteResult(static_cast<uint8_t>(blockValue), keyTypeChar, key, F("uid_unsupported"));
+      return;
+    }
+
+    uint8_t uid[4] = {response[3], response[4], response[5], response[6]};
+    if (!mifareClassicAuthenticate(static_cast<uint8_t>(blockValue), keyType, key, uid)) {
+      mifareHaltSafe();
+      printBruteResult(static_cast<uint8_t>(blockValue), keyTypeChar, key, F("auth_failed"));
+      return;
+    }
+
+    if (mifareClassicReadBlockSafe(static_cast<uint8_t>(blockValue), data)) {
+      mifareHaltSafe();
+      printBruteOkResult(static_cast<uint8_t>(blockValue), keyTypeChar, key, data);
+      return;
+    }
+    mifareHaltSafe();
+    delay(8);
+  }
+
+  printBruteResult(static_cast<uint8_t>(blockValue), keyTypeChar, key, F("read_failed"));
+}
+
+bool processSerialCommand() {
+  if (!Serial.available()) {
+    return false;
+  }
+  String line = Serial.readStringUntil('\n');
+  line.trim();
+  if (line.length() == 0) {
+    return false;
+  }
+  if (line.startsWith(F("PND1 BRUTE"))) {
+    handleMifareBruteCommand(line);
+    return true;
+  }
+  Serial.println(F("PND1 ERROR status=unknown_command"));
+  return true;
+}
+
 MifareClassicDumpResult readMifareClassicWithDictionary(
     uint8_t *uid,
     uint8_t uidLength,
@@ -1340,6 +1482,7 @@ bool dumpFeliCaIfPresent() {
 
 void setup() {
   Serial.begin(SERIAL_BAUD);
+  Serial.setTimeout(20);
   delay(1000);
 
   SPI.begin(PN5180_SCK_PIN, PN5180_MISO_PIN, PN5180_MOSI_PIN, PN5180_NSS_PIN);
@@ -1355,6 +1498,10 @@ void setup() {
 }
 
 void loop() {
+  if (processSerialCommand()) {
+    return;
+  }
+
   if (dumpIso14443AIfPresent() || dumpIso15693IfPresent() || dumpFeliCaIfPresent()) {
     delay(3000);
     return;

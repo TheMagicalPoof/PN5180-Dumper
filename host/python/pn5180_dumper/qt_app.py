@@ -1,5 +1,6 @@
 import sys
 import time
+from queue import Empty, Queue
 from pathlib import Path
 
 import serial
@@ -32,7 +33,7 @@ from PyQt5.QtWidgets import (
 
 from . import __version__
 from .capture import DumpCapture, parse_new_metadata, save_capture
-from .keys import DEFAULT_MIFARE_CLASSIC_KEYS, parse_key_list
+from .keys import DEFAULT_MIFARE_CLASSIC_KEYS, load_proxmark_mfc_keys, parse_key_list
 
 
 DEFAULT_BAUD = 460800
@@ -75,9 +76,13 @@ class SerialCaptureWorker(QThread):
         self.out_dir = out_dir
         self.once = once
         self._stop_requested = False
+        self._command_queue: Queue[str] = Queue()
 
     def stop(self) -> None:
         self._stop_requested = True
+
+    def send_command(self, command: str) -> None:
+        self._command_queue.put(command)
 
     def run(self) -> None:
         capture = DumpCapture()
@@ -98,6 +103,14 @@ class SerialCaptureWorker(QThread):
                 time.sleep(0.3)
 
                 while not self._stop_requested:
+                    while True:
+                        try:
+                            command = self._command_queue.get_nowait()
+                        except Empty:
+                            break
+                        ser.write((command.strip() + "\n").encode("ascii", errors="ignore"))
+                        ser.flush()
+
                     raw = ser.readline()
                     if not raw:
                         continue
@@ -149,7 +162,14 @@ class MainWindow(QMainWindow):
         self.current_metadata: dict | None = None
         self.current_folder: Path | None = None
         self.current_dump_bytes = b""
+        self.current_block_statuses: list[str] = []
         self.write_bytes = b""
+        self.brute_keys: list[str] = []
+        self.brute_queue: list[tuple[int, str, str]] = []
+        self.brute_total = 0
+        self.brute_checked = 0
+        self.brute_current_block: int | None = None
+        self.brute_running = False
 
         self.setWindowTitle(f"PN5180 Dumper Qt5 v{__version__}")
         self.resize(1080, 720)
@@ -185,10 +205,12 @@ class MainWindow(QMainWindow):
         self.read_export_browse_button = QPushButton("Browse")
         self.read_export_button = QPushButton("Export dump")
         self.read_export_button.setEnabled(False)
-        self.read_hex_table = self._create_hex_table()
+        self.read_hex_table = self._create_hex_table(action_columns=True)
         self.read_button = QPushButton("Read")
         self.read_button.setEnabled(False)
         self.read_button.setToolTip("Requires firmware command protocol V2")
+        self.stop_brute_button = QPushButton("Stop Brute")
+        self.stop_brute_button.setEnabled(False)
 
         self.write_address_spin = QSpinBox()
         self.write_address_spin.setRange(0, 65535)
@@ -274,6 +296,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("Count"), 0, 2)
         layout.addWidget(self.read_count_spin, 0, 3)
         layout.addWidget(self.read_button, 0, 4)
+        layout.addWidget(self.stop_brute_button, 0, 5)
         layout.addWidget(QLabel("Export path"), 1, 0)
         layout.addWidget(self.read_export_path_edit, 1, 1, 1, 3)
         layout.addWidget(self.read_export_browse_button, 1, 4)
@@ -331,9 +354,12 @@ class MainWindow(QMainWindow):
         self.populate_auth_placeholder(16)
         return tab
 
-    def _create_hex_table(self) -> QTableWidget:
-        table = HexTableWidget(0, 17)
-        table.setHorizontalHeaderLabels(["Offset"] + [f"{i:02X}" for i in range(16)])
+    def _create_hex_table(self, action_columns: bool = False) -> QTableWidget:
+        headers = ["Offset"] + [f"{i:02X}" for i in range(16)]
+        if action_columns:
+            headers.extend(["Brute", "Progress"])
+        table = HexTableWidget(0, len(headers))
+        table.setHorizontalHeaderLabels(headers)
         table.setSelectionBehavior(QAbstractItemView.SelectItems)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.setToolTip("Select cells and press Ctrl+C to copy the visible table text.")
@@ -350,6 +376,7 @@ class MainWindow(QMainWindow):
         self.port_combo.currentIndexChanged.connect(self.save_selected_port)
         self.keys_edit.textChanged.connect(self.refresh_key_count)
         self.auth_test_button.clicked.connect(self.test_keys)
+        self.stop_brute_button.clicked.connect(self.stop_brute)
 
     def refresh_ports(self) -> None:
         current = self.port_combo.currentData() or self.settings.value("connection/port", "")
@@ -458,15 +485,21 @@ class MainWindow(QMainWindow):
                 self.current_metadata = payload
                 self._set_tag_online(True)
                 self.current_device_label.setText(self._format_current_device(payload, "capturing"))
+        elif line.startswith("PND1 BRUTE_RESULT"):
+            self.handle_brute_result(self._parse_fields(line))
         self.log_view.appendPlainText(line)
 
-    def update_detected_tag(self, payload: str, memory_state: str) -> None:
+    def _parse_fields(self, line: str) -> dict[str, str]:
         fields: dict[str, str] = {}
-        for part in payload.split():
+        for part in line.split():
             if "=" not in part:
                 continue
             key, value = part.split("=", 1)
             fields[key] = value
+        return fields
+
+    def update_detected_tag(self, payload: str, memory_state: str) -> None:
+        fields = self._parse_fields(payload)
 
         metadata = {
             "type": fields.get("type", "-"),
@@ -490,7 +523,13 @@ class MainWindow(QMainWindow):
         if dump_path.exists():
             self.current_dump_bytes = dump_path.read_bytes()
             statuses = metadata.get("block_statuses") if isinstance(metadata.get("block_statuses"), list) else None
-            self.populate_hex_table(self.read_hex_table, self.current_dump_bytes, statuses)
+            self.current_block_statuses = list(statuses or [])
+            self.populate_hex_table(
+                self.read_hex_table,
+                self.current_dump_bytes,
+                self.current_block_statuses,
+                enable_brute=True,
+            )
             self.read_export_button.setEnabled(True)
             default_export = self.read_export_path_edit.text().strip()
             if not default_export:
@@ -498,10 +537,107 @@ class MainWindow(QMainWindow):
                 self.read_export_path_edit.setText(export_path)
         else:
             self.current_dump_bytes = b""
+            self.current_block_statuses = []
             self.populate_hex_table(self.read_hex_table, b"")
             self.read_export_button.setEnabled(False)
 
         self.status_label.setText(f"Saved record to {folder}")
+
+    def start_brute_for_block(self, block: int) -> None:
+        if not self.worker:
+            self.once_check.setChecked(False)
+            self.start_capture()
+            if not self.worker:
+                QMessageBox.information(self, "Serial is stopped", "Start capture first and keep the port connected.")
+                return
+        if self.brute_running:
+            QMessageBox.information(self, "Brute is running", "Stop the current brute task first.")
+            return
+
+        try:
+            self.brute_keys = load_proxmark_mfc_keys()
+        except Exception as exc:
+            QMessageBox.warning(self, "Dictionary error", f"Could not load Proxmark dictionaries: {exc}")
+            return
+
+        self.brute_queue = [(block, key_type, key) for key in self.brute_keys for key_type in ("A", "B")]
+        self.brute_total = len(self.brute_queue)
+        self.brute_checked = 0
+        self.brute_current_block = block
+        self.brute_running = True
+        self.stop_brute_button.setEnabled(True)
+        self.update_brute_progress(block)
+        self.send_next_brute_attempt()
+
+    def stop_brute(self) -> None:
+        self.brute_running = False
+        self.brute_queue = []
+        self.stop_brute_button.setEnabled(False)
+        if self.brute_current_block is not None:
+            self.update_brute_progress(self.brute_current_block, "stopped")
+        self.status_label.setText("Brute stopped")
+
+    def send_next_brute_attempt(self) -> None:
+        if not self.brute_running or not self.worker:
+            return
+        if not self.brute_queue:
+            block = self.brute_current_block
+            self.brute_running = False
+            self.stop_brute_button.setEnabled(False)
+            if block is not None:
+                self.update_brute_progress(block, "exhausted")
+            self.status_label.setText("Brute exhausted the dictionary")
+            return
+
+        block, key_type, key = self.brute_queue.pop(0)
+        self.brute_checked += 1
+        self.brute_current_block = block
+        self.update_brute_progress(block)
+        self.worker.send_command(f"PND1 BRUTE {block} {key_type} {key}")
+
+    def handle_brute_result(self, fields: dict[str, str]) -> None:
+        if not self.brute_running:
+            return
+
+        status = fields.get("status", "")
+        block_text = fields.get("block")
+        if block_text is None:
+            self.send_next_brute_attempt()
+            return
+
+        block = int(block_text)
+        if status == "ok" and "data" in fields:
+            data = bytes.fromhex(fields["data"])
+            start = block * 16
+            if len(self.current_dump_bytes) < start + 16:
+                self.current_dump_bytes = self.current_dump_bytes.ljust(start + 16, b"\x00")
+            buffer = bytearray(self.current_dump_bytes)
+            buffer[start:start + 16] = data
+            self.current_dump_bytes = bytes(buffer)
+            while len(self.current_block_statuses) <= block:
+                self.current_block_statuses.append("OK")
+            self.current_block_statuses[block] = "OK"
+            self.populate_hex_table(
+                self.read_hex_table,
+                self.current_dump_bytes,
+                self.current_block_statuses,
+                enable_brute=True,
+            )
+            self.brute_running = False
+            self.brute_queue = []
+            self.stop_brute_button.setEnabled(False)
+            self.update_brute_progress(block, f"found {fields.get('key_type')} {fields.get('key')}")
+            self.status_label.setText(f"Recovered block {block}")
+            return
+
+        self.send_next_brute_attempt()
+
+    def update_brute_progress(self, block: int, text: str | None = None) -> None:
+        if self.read_hex_table.columnCount() < 19:
+            return
+        remaining = max(self.brute_total - self.brute_checked, 0)
+        value = text or f"{remaining}/{self.brute_total}"
+        self.read_hex_table.setItem(block, 18, QTableWidgetItem(value))
 
     def export_current_dump(self) -> None:
         if not self.current_dump_bytes:
@@ -591,7 +727,13 @@ class MainWindow(QMainWindow):
             ),
         )
 
-    def populate_hex_table(self, table: QTableWidget, data: bytes, block_statuses: list[str] | None = None) -> None:
+    def populate_hex_table(
+        self,
+        table: QTableWidget,
+        data: bytes,
+        block_statuses: list[str] | None = None,
+        enable_brute: bool = False,
+    ) -> None:
         row_count = (len(data) + 15) // 16
         table.setRowCount(row_count)
         for row in range(row_count):
@@ -613,6 +755,17 @@ class MainWindow(QMainWindow):
                     item.setForeground(QBrush(QColor("#7a5200")))
                     item.setToolTip("MS: sector key is missing from the current dictionary")
                 table.setItem(row, column + 1, item)
+
+            if enable_brute and table.columnCount() >= 19:
+                if status in {"NN", "MS"}:
+                    button = QPushButton("Pick")
+                    button.clicked.connect(lambda _checked=False, block=row: self.start_brute_for_block(block))
+                    table.setCellWidget(row, 17, button)
+                    table.setItem(row, 18, QTableWidgetItem("ready"))
+                else:
+                    table.removeCellWidget(row, 17)
+                    table.setItem(row, 17, QTableWidgetItem(""))
+                    table.setItem(row, 18, QTableWidgetItem(""))
         table.resizeColumnsToContents()
 
     def _format_current_device(self, metadata: dict, folder: str) -> str:

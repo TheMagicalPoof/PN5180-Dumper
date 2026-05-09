@@ -1,3 +1,14 @@
+from urllib.request import urlopen
+
+
+PROXMARK_MFC_DICTIONARY_URLS = [
+    "https://raw.githubusercontent.com/RfidResearchGroup/proxmark3/master/client/dictionaries/mfc_default_keys.dic",
+    "https://raw.githubusercontent.com/RfidResearchGroup/proxmark3/master/client/dictionaries/mfc_keys_bmp_sorted.dic",
+    "https://raw.githubusercontent.com/RfidResearchGroup/proxmark3/master/client/dictionaries/mfc_keys_icbmp_sorted.dic",
+    "https://raw.githubusercontent.com/RfidResearchGroup/proxmark3/master/client/dictionaries/mfc_keys_mrzd_sorted.dic",
+]
+
+
 DEFAULT_MIFARE_CLASSIC_KEYS = [
     "FFFFFFFFFFFF",
     "A0B0C0D0E0F0",
@@ -114,11 +125,35 @@ def parse_key_list(text: str) -> list[str]:
     keys: list[str] = []
     seen: set[str] = set()
     for line in text.replace(",", "\n").replace(";", "\n").splitlines():
-        candidate = line.strip()
+        candidate = line.split("#", 1)[0].strip()
         if not candidate:
             continue
         key = normalize_mifare_key(candidate)
         if key not in seen:
             keys.append(key)
             seen.add(key)
+    return keys
+
+
+def load_proxmark_mfc_keys(limit: int | None = None) -> list[str]:
+    keys = parse_key_list("\n".join(DEFAULT_MIFARE_CLASSIC_KEYS))
+    seen = set(keys)
+
+    for url in PROXMARK_MFC_DICTIONARY_URLS:
+        with urlopen(url, timeout=20) as response:
+            text = response.read().decode("utf-8", errors="replace")
+        for line in text.replace(",", "\n").replace(";", "\n").splitlines():
+            candidate = line.split("#", 1)[0].strip()
+            if not candidate:
+                continue
+            try:
+                key = normalize_mifare_key(candidate)
+            except ValueError:
+                continue
+            if key not in seen:
+                keys.append(key)
+                seen.add(key)
+                if limit is not None and len(keys) >= limit:
+                    return keys
+
     return keys

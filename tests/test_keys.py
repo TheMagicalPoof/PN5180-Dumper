@@ -9,7 +9,7 @@ def test_default_keys_are_valid_and_unique() -> None:
 
 
 def test_parse_key_list_normalizes_and_deduplicates() -> None:
-    assert parse_key_list("ff ff ff ff ff ff\nFFFFFFFFFFFF\na0-b0-c0-d0-e0-f0") == [
+    assert parse_key_list("ff ff ff ff ff ff\nFFFFFFFFFFFF # default\na0-b0-c0-d0-e0-f0") == [
         "FFFFFFFFFFFF",
         "A0B0C0D0E0F0",
     ]
