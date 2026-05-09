@@ -31,6 +31,7 @@ from PyQt5.QtWidgets import (
 
 from . import __version__
 from .capture import DumpCapture, save_capture
+from .keys import DEFAULT_MIFARE_CLASSIC_KEYS, parse_key_list
 
 
 DEFAULT_BAUD = 460800
@@ -174,6 +175,16 @@ class MainWindow(QMainWindow):
         self.write_button = QPushButton("Write")
         self.write_button.setEnabled(False)
         self.write_button.setToolTip("Requires firmware command protocol V2")
+        self.keys_edit = QPlainTextEdit("\n".join(DEFAULT_MIFARE_CLASSIC_KEYS))
+        self.keys_edit.setMaximumBlockCount(256)
+        self.auth_test_button = QPushButton("Test keys")
+        self.auth_test_button.setEnabled(False)
+        self.auth_test_button.setToolTip("Requires MIFARE Classic auth command in firmware")
+        self.auth_key_count_label = QLabel("")
+        self.auth_result_table = QTableWidget(0, 4)
+        self.auth_result_table.setHorizontalHeaderLabels(["Sector", "Key A", "Key B", "Status"])
+        self.auth_result_table.horizontalHeader().setStretchLastSection(True)
+        self.auth_result_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
 
         self._build_layout()
         self._connect_signals()
@@ -216,6 +227,7 @@ class MainWindow(QMainWindow):
         mode_layout.addWidget(self.mode_tabs)
         self.mode_tabs.addTab(self._build_read_tab(), "Read")
         self.mode_tabs.addTab(self._build_write_tab(), "Write")
+        self.mode_tabs.addTab(self._build_auth_tab(), "Keys/Auth")
 
         log_box = QGroupBox("Diagnostic serial log")
         log_layout = QVBoxLayout(log_box)
@@ -274,6 +286,26 @@ class MainWindow(QMainWindow):
         )
         return tab
 
+    def _build_auth_tab(self) -> QWidget:
+        tab = QWidget()
+        layout = QGridLayout(tab)
+        layout.addWidget(QLabel("MIFARE Classic key dictionary"), 0, 0, 1, 4)
+        layout.addWidget(self.keys_edit, 1, 0, 1, 4)
+        layout.addWidget(self.auth_test_button, 2, 0)
+        layout.addWidget(self.auth_key_count_label, 2, 1, 1, 3)
+        layout.addWidget(QLabel("Sector auth results"), 3, 0, 1, 4)
+        layout.addWidget(self.auth_result_table, 4, 0, 1, 4)
+        layout.addWidget(
+            QLabel("Key testing will become active after MIFARE Classic auth lands in firmware."),
+            5,
+            0,
+            1,
+            4,
+        )
+        self.refresh_key_count()
+        self.populate_auth_placeholder(16)
+        return tab
+
     def _create_hex_table(self) -> QTableWidget:
         table = QTableWidget(0, 17)
         table.setHorizontalHeaderLabels(["Offset"] + [f"{i:02X}" for i in range(16)])
@@ -290,6 +322,7 @@ class MainWindow(QMainWindow):
         self.write_import_browse_button.clicked.connect(self.choose_write_import_path)
         self.write_load_button.clicked.connect(self.load_write_file)
         self.port_combo.currentIndexChanged.connect(self.save_selected_port)
+        self.keys_edit.textChanged.connect(self.refresh_key_count)
 
     def refresh_ports(self) -> None:
         current = self.port_combo.currentData() or self.settings.value("connection/port", "")
@@ -439,6 +472,22 @@ class MainWindow(QMainWindow):
         self.populate_hex_table(self.write_hex_table, self.write_bytes)
         self.settings.setValue("paths/write_import", str(source))
         self.status_label.setText(f"Loaded {len(self.write_bytes)} bytes from {source}")
+
+    def refresh_key_count(self) -> None:
+        try:
+            keys = parse_key_list(self.keys_edit.toPlainText())
+        except ValueError as exc:
+            self.auth_key_count_label.setText(f"Invalid key list: {exc}")
+            return
+        self.auth_key_count_label.setText(f"{len(keys)} unique keys ready")
+
+    def populate_auth_placeholder(self, sector_count: int) -> None:
+        self.auth_result_table.setRowCount(sector_count)
+        for sector in range(sector_count):
+            self.auth_result_table.setItem(sector, 0, QTableWidgetItem(str(sector)))
+            self.auth_result_table.setItem(sector, 1, QTableWidgetItem("-"))
+            self.auth_result_table.setItem(sector, 2, QTableWidgetItem("-"))
+            self.auth_result_table.setItem(sector, 3, QTableWidgetItem("not tested"))
 
     def populate_hex_table(self, table: QTableWidget, data: bytes) -> None:
         row_count = (len(data) + 15) // 16

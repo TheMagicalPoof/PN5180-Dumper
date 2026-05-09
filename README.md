@@ -11,6 +11,7 @@ The current firmware still supports streaming captures over serial. The reposito
 - `FELICA` - IDm detection. Memory dump is not implemented because the bundled PN5180 library exposes polling/serial detection only.
 
 MIFARE Classic tags are detected as ISO14443A, but memory read/write requires Crypto1 authentication. Until that driver exists, the firmware reports `memory_read=auth_required` instead of emitting a fake or empty dump.
+The Qt UI includes a `Keys/Auth` tab with a default MIFARE Classic key dictionary. Actual key testing requires the next firmware command-mode auth driver.
 
 Known limitation: `iClass` exists in the bundled PN5180 library, but it currently conflicts with the ISO15693 header when both are included in the same sketch. It will need a separate compatibility wrapper or a separate sketch before it can be enabled in the unified scanner.
 

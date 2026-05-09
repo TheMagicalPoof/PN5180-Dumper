@@ -50,6 +50,7 @@ Firmware response fields:
 - `write` - write blocks/pages/services.
 - `dump` - read all discoverable memory using a strategy.
 - `auth` - authenticate/unlock when supported.
+- `auth.test_keys` - try a host-provided key dictionary against MIFARE Classic sectors.
 - `raw.transceive` - expert low-level command.
 - `cancel` - cancel long operation.
 
@@ -69,9 +70,17 @@ PND2 {"id":11,"event":"data","offset":0,"encoding":"hex","data":"000000000000000
 PND2 {"id":11,"status":"ok"}
 ```
 
+## Example MIFARE Classic Key Test
+
+```text
+PND2 {"id":12,"cmd":"auth.test_keys","args":{"protocol":"ISO14443A","uid":"C363AE0E","key_type":["A","B"],"keys":["FFFFFFFFFFFF","A0A1A2A3A4A5"]}}
+PND2 {"id":12,"event":"auth","sector":0,"key_type":"A","key":"FFFFFFFFFFFF","status":"ok"}
+PND2 {"id":12,"event":"auth","sector":1,"status":"failed"}
+PND2 {"id":12,"status":"ok","summary":{"sectors":16,"authenticated":1}}
+```
+
 ## Safety Rules
 
 - `write`, `lock`, `password`, and `raw.transceive` must never run implicitly.
 - Host UIs should show the exact target protocol, UID, address range, and byte count before write operations.
 - Dumps should include metadata, raw serial/protocol logs, and hashes.
-
