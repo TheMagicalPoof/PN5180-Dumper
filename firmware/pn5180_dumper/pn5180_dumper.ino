@@ -1222,7 +1222,7 @@ MifareClassicDumpResult readMifareClassicWithDictionary(
 
       uint8_t buffer[MIFARE_CLASSIC_BLOCK_SIZE] = {0};
       bool blockOk = false;
-      for (uint8_t attempt = 0; attempt < 2 && !blockOk; ++attempt) {
+      for (uint8_t attempt = 0; attempt < 1 && !blockOk; ++attempt) {
         if (offset > 0 || attempt > 0) {
           reselectIso14443A(uid, uidLength, activeSak);
           mifareClassicAuthenticate(static_cast<uint8_t>(block), authenticatedKeyType, MIFARE_CLASSIC_KEYS[authenticatedKeyIndex], uid);

@@ -170,6 +170,7 @@ class MainWindow(QMainWindow):
         self.brute_checked = 0
         self.brute_current_block: int | None = None
         self.brute_running = False
+        self.restart_after_reset = False
 
         self.setWindowTitle(f"PN5180 Dumper Qt5 v{__version__}")
         self.resize(1080, 720)
@@ -210,7 +211,8 @@ class MainWindow(QMainWindow):
         self.read_button.setEnabled(False)
         self.read_button.setToolTip("Requires firmware command protocol V2")
         self.stop_brute_button = QPushButton("Stop Brute")
-        self.stop_brute_button.setEnabled(False)
+        self.stop_brute_button.setEnabled(True)
+        self.reset_button = QPushButton("RESET")
 
         self.write_address_spin = QSpinBox()
         self.write_address_spin.setRange(0, 65535)
@@ -297,6 +299,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.read_count_spin, 0, 3)
         layout.addWidget(self.read_button, 0, 4)
         layout.addWidget(self.stop_brute_button, 0, 5)
+        layout.addWidget(self.reset_button, 0, 6)
         layout.addWidget(QLabel("Export path"), 1, 0)
         layout.addWidget(self.read_export_path_edit, 1, 1, 1, 3)
         layout.addWidget(self.read_export_browse_button, 1, 4)
@@ -377,6 +380,7 @@ class MainWindow(QMainWindow):
         self.keys_edit.textChanged.connect(self.refresh_key_count)
         self.auth_test_button.clicked.connect(self.test_keys)
         self.stop_brute_button.clicked.connect(self.stop_brute)
+        self.reset_button.clicked.connect(self.reset_session)
 
     def refresh_ports(self) -> None:
         current = self.port_combo.currentData() or self.settings.value("connection/port", "")
@@ -461,6 +465,9 @@ class MainWindow(QMainWindow):
         self.connect_button.setEnabled(True)
         self.disconnect_button.setEnabled(False)
         self._set_reader_online(False)
+        if self.restart_after_reset:
+            self.restart_after_reset = False
+            self.start_capture()
 
     def append_log(self, line: str) -> None:
         self._set_reader_online(True)
@@ -565,17 +572,39 @@ class MainWindow(QMainWindow):
         self.brute_checked = 0
         self.brute_current_block = block
         self.brute_running = True
-        self.stop_brute_button.setEnabled(True)
         self.update_brute_progress(block)
         self.send_next_brute_attempt()
 
     def stop_brute(self) -> None:
         self.brute_running = False
         self.brute_queue = []
-        self.stop_brute_button.setEnabled(False)
         if self.brute_current_block is not None:
             self.update_brute_progress(self.brute_current_block, "stopped")
         self.status_label.setText("Brute stopped")
+
+    def reset_session(self) -> None:
+        was_running = self.worker is not None
+        self.brute_running = False
+        self.brute_queue = []
+        self.brute_total = 0
+        self.brute_checked = 0
+        self.brute_current_block = None
+
+        self.current_metadata = None
+        self.current_folder = None
+        self.current_dump_bytes = b""
+        self.current_block_statuses = []
+        self.populate_hex_table(self.read_hex_table, b"", enable_brute=True)
+        self.read_export_button.setEnabled(False)
+        self._set_tag_online(False)
+        self.log_view.clear()
+
+        if was_running and self.worker:
+            self.restart_after_reset = True
+            self.worker.stop()
+            self.status_label.setText("Resetting connection...")
+        else:
+            self.status_label.setText("Reset")
 
     def send_next_brute_attempt(self) -> None:
         if not self.brute_running or not self.worker:
@@ -583,7 +612,6 @@ class MainWindow(QMainWindow):
         if not self.brute_queue:
             block = self.brute_current_block
             self.brute_running = False
-            self.stop_brute_button.setEnabled(False)
             if block is not None:
                 self.update_brute_progress(block, "exhausted")
             self.status_label.setText("Brute exhausted the dictionary")
@@ -625,7 +653,6 @@ class MainWindow(QMainWindow):
             )
             self.brute_running = False
             self.brute_queue = []
-            self.stop_brute_button.setEnabled(False)
             self.update_brute_progress(block, f"found {fields.get('key_type')} {fields.get('key')}")
             self.status_label.setText(f"Recovered block {block}")
             return
