@@ -1,39 +1,48 @@
 # Roadmap
 
-## Phase 1 - Structure
+## Done Enough For Alpha
 
-- Keep the current streaming firmware working.
-- Split repository into firmware, host, docs, and scripts.
-- Add host CLI entrypoint and port listing.
-- Document command protocol V2.
+- Repository split into firmware, host package, docs, scripts, and tests.
+- ESP32-S3 PN5180 firmware builds with Arduino CLI.
+- Qt5 GUI starts on Windows and remembers serial port.
+- Command-driven firmware loop.
+- ISO15693 dump path.
+- ISO14443A detection.
+- MIFARE Classic 1K default-key dump tested with `FFFFFFFFFFFF`.
+- MIFARE Classic safe data-block write path.
+- Guarded block 0 write flow for UID-changeable blanks.
+- Gen1A magic probe.
+- Capture folder naming by timestamp + hash.
 
-## Phase 2 - Firmware Command Mode
+## Before `v0.3.0-alpha`
 
-- Add serial command parser on ESP32-S3.
-- Implement `hello`, `scan`, and `identify`.
-- Return capability metadata for each driver.
-- Keep legacy streaming capture behind a mode/config flag.
-- Implement `auth.test_keys` for MIFARE Classic with host-provided key dictionaries.
+- Keep README/protocol docs aligned with current code.
+- Add parser tests for `OK`, `NN`, and `MS` block status.
+- Add smoke tests for capture folder naming and metadata.
+- Add a visible warning in Qt that 4K/S70 is experimental until tested.
+- Add release notes with known blank-tag types: Gen1A, CUID, FUID, UFUID.
 
-## Phase 3 - Read/Dump Operations
+## Before `v0.4.0`
 
-- ISO15693 full read/write by block.
-- NTAG/Ultralight read/write by page.
-- FeliCa service discovery/read where possible.
-- iClass feasibility pass and library conflict fix.
-- Unified dump storage format.
+- Validate MIFARE Classic 4K/S70 read and write on real hardware.
+- Add a transport/client layer shared by Qt and CLI.
+- Implement CLI commands for `dump`, `write`, and `magic-probe`.
+- Add write dry-run summary with exact block list.
+- Improve block 0 handling per blank type.
+- Add optional trailer write mode behind a separate danger gate.
 
-## Phase 4 - Safety And Write Support
+## Before `v1.0`
 
-- Add dry-run and explicit write confirmation.
-- Add write verification reads.
-- Add protected/authenticated operation model.
-- Add test fixtures from safe synthetic logs.
+- Stable command protocol, likely `PND2`.
+- Versioned firmware capability handshake.
+- Better cancellation for long operations.
+- Installer/portable Windows bundle.
+- Cross-platform console UI.
+- Expanded tag support: NTAG/Ultralight pages, FeliCa services, more ISO15693 write operations.
+- Broader automated tests for parser, protocol, write queue, and UI state.
 
-## Phase 5 - User Interfaces
+## Known Open Questions
 
-- Cross-platform console CLI for Linux/Windows/macOS.
-- Small Qt GUI for Windows with port selector, scan table, tag details, dump viewer, and write panel.
-- Shared host library for both UI paths.
-
-Initial PyQt5 GUI exists and supports the current streaming capture mode. It should switch from passive serial capture to active `scan`, `identify`, `read`, `write`, and `dump` commands after protocol V2 is implemented in firmware.
+- Which exact magic blank families should be supported first: Gen1A, CUID, FUID, UFUID?
+- Can PN5180 reliably perform all needed magic UID backdoors, or do some blanks require lower-level timing work?
+- Should iClass live in the unified firmware or a separate sketch because of library conflicts?

@@ -1,86 +1,130 @@
 # Serial Protocol
 
-This project currently supports a legacy streaming protocol and is being prepared for a command protocol.
+The current firmware uses a simple line-oriented protocol named `PND1`.
 
-## Legacy Streaming Protocol
+The protocol is intentionally human-readable because the diagnostic serial log is part of the workflow. A future `PND2` protocol may move to structured request IDs and NDJSON, but `PND1` is the implemented contract today.
 
-The firmware emits records without host commands:
+## Startup
 
 ```text
 READER_READY protocols=ISO15693,ISO14443A,FELICA device=XIAO-ESP32-S3
+```
+
+The firmware no longer performs cyclic reads by itself. The host must send commands.
+
+## Dump Command
+
+Request:
+
+```text
+PND1 DUMP
+```
+
+Typical response:
+
+```text
+TAG_DETECTED type=ISO14443A protocol=ISO14443A uid=C363AE0E uid_length=4 atqa=0400 sak=08 family=MIFARE_CLASSIC_1K
 DUMP_BEGIN
-META type=ISO15693 protocol=ISO15693 uid=E008... uid_length=8 rc=0 block_size=8 num_blocks=250 ...
+META type=ISO14443A protocol=ISO14443A uid=C363AE0E uid_length=4 rc=0 block_size=16 num_blocks=64 ... memory_read=ok blocks_read=64 sectors=16 sectors_authenticated=16 key_dictionary_size=1
 COMPACT_BEGIN
-00 00 00 00 00 00 00 00
+INFO mfclassic_block block=0
+C3 63 AE 0E 00 08 04 00 62 63 64 65 66 67 68 69
 COMPACT_END
 DUMP_END
 ```
 
-The host parser in `host/python/pn5180_dumper/capture.py` supports this for current captures.
+When no tag is present:
 
-## Planned Command Protocol V2
+```text
+INFO no_card
+```
 
-V2 should be line-oriented NDJSON with a short prefix so logs remain easy to inspect and resynchronize:
+## Compact Block Status
+
+Before each hex line, firmware may emit one block-status marker:
+
+- `INFO mfclassic_block block=N`: block was read.
+- `INFO mfclassic_block_missing block=N`: authenticated but read failed.
+- `INFO mfclassic_block_key_missing block=N`: no known key worked.
+
+The Python parser maps these to:
+
+- `OK`
+- `NN`
+- `MS`
+
+## MIFARE Classic Brute/Pick
+
+Request:
+
+```text
+PND1 BRUTE <block> <A|B> <12-hex-key>
+```
+
+Response:
+
+```text
+PND1 BRUTE_RESULT block=15 key_type=A key=FFFFFFFFFFFF status=ok data=00112233445566778899AABBCCDDEEFF
+PND1 BRUTE_RESULT block=15 key_type=A key=FFFFFFFFFFFF status=auth_failed
+PND1 BRUTE_RESULT block=15 key_type=A key=FFFFFFFFFFFF status=read_failed
+```
+
+The Qt app queues dictionary attempts host-side and sends one command at a time.
+
+## MIFARE Classic Write
+
+Request:
+
+```text
+PND1 WRITE <block> <32-hex-data> [VERIFY] [ALLOW0]
+```
+
+Responses:
+
+```text
+PND1 WRITE_RESULT block=1 status=ok key_type=A key=FFFFFFFFFFFF
+PND1 WRITE_RESULT block=3 status=skipped_protected
+PND1 WRITE_RESULT block=0 status=magic_unlock_failed
+PND1 WRITE_RESULT block=0 status=ok key_type=M key=FFFFFFFFFFFF
+```
+
+Safety behavior:
+
+- Sector trailers are always skipped.
+- Block 0 is skipped unless `ALLOW0` is present.
+- `ALLOW0` is meant only for UID-changeable blanks.
+- `key_type=M` means the Gen1A magic fallback wrote block 0.
+
+Known block 0 failure statuses:
+
+- `magic_unlock_failed`: Gen1A backdoor did not respond.
+- `magic_write_failed`: backdoor opened but block write failed.
+- `magic_verify_failed`: write appeared to run but verify did not match.
+
+## Magic Probe
+
+Request:
+
+```text
+PND1 MAGIC_PROBE
+```
+
+Response:
+
+```text
+PND1 MAGIC_RESULT gen1a=ok
+PND1 MAGIC_RESULT gen1a=failed
+```
+
+This only probes the Gen1A `0x40/0x43` backdoor. CUID/FUID/UFUID blanks may still be UID-changeable even when this probe fails.
+
+## Future PND2 Direction
+
+The desired future protocol is request/response NDJSON with IDs:
 
 ```text
 PND2 {"id":1,"cmd":"hello"}
 PND2 {"id":1,"status":"ok","device":{"name":"PN5180 Dumper","fw":"0.3.0"}}
 ```
 
-Host request fields:
-
-- `id` - host-generated integer request id.
-- `cmd` - command name.
-- `args` - optional command arguments.
-
-Firmware response fields:
-
-- `id` - matching request id, when response belongs to a request.
-- `event` - async event name, for scans and progress.
-- `status` - `ok` or `error` for command completion.
-- `error` - structured error object when `status=error`.
-
-## Planned Commands
-
-- `hello` - firmware/protocol capabilities.
-- `config.get` / `config.set` - RF and reader settings.
-- `scan` - scan protocols and report visible tags.
-- `identify` - activate one selected tag and return metadata.
-- `read` - read blocks/pages/services.
-- `write` - write blocks/pages/services.
-- `dump` - read all discoverable memory using a strategy.
-- `auth` - authenticate/unlock when supported.
-- `auth.test_keys` - try a host-provided key dictionary against MIFARE Classic sectors.
-- `raw.transceive` - expert low-level command.
-- `cancel` - cancel long operation.
-
-## Example Scan
-
-```text
-PND2 {"id":10,"cmd":"scan","args":{"protocols":["auto"],"timeout_ms":3000}}
-PND2 {"id":10,"event":"tag","tag":{"protocol":"ISO15693","uid":"E008014860A33A8F"}}
-PND2 {"id":10,"status":"ok","summary":{"count":1}}
-```
-
-## Example Read
-
-```text
-PND2 {"id":11,"cmd":"read","args":{"protocol":"ISO15693","uid":"E008014860A33A8F","block":0,"count":4}}
-PND2 {"id":11,"event":"data","offset":0,"encoding":"hex","data":"000000000000000000010A0C070A0000"}
-PND2 {"id":11,"status":"ok"}
-```
-
-## Example MIFARE Classic Key Test
-
-```text
-PND2 {"id":12,"cmd":"auth.test_keys","args":{"protocol":"ISO14443A","uid":"C363AE0E","key_type":["A","B"],"keys":["FFFFFFFFFFFF","A0A1A2A3A4A5"]}}
-PND2 {"id":12,"event":"auth","sector":0,"key_type":"A","key":"FFFFFFFFFFFF","status":"ok"}
-PND2 {"id":12,"event":"auth","sector":1,"status":"failed"}
-PND2 {"id":12,"status":"ok","summary":{"sectors":16,"authenticated":1}}
-```
-
-## Safety Rules
-
-- `write`, `lock`, `password`, and `raw.transceive` must never run implicitly.
-- Host UIs should show the exact target protocol, UID, address range, and byte count before write operations.
-- Dumps should include metadata, raw serial/protocol logs, and hashes.
+This is not implemented yet.

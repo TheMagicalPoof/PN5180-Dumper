@@ -1,80 +1,96 @@
 # Architecture
 
-PN5180 Dumper is moving from a single-purpose capture sketch to a universal PN5180 tool with three layers:
+PN5180 Dumper currently has three practical layers:
 
-1. Firmware command engine on ESP32-S3.
-2. Host protocol/client library over serial.
-3. User interfaces: Windows Qt GUI and cross-platform console CLI.
+1. ESP32-S3 firmware for PN5180 RF operations.
+2. Python host package for serial capture/parsing/storage.
+3. PyQt5 Windows GUI for bench use.
 
-## Goals
+The repo is still shaped for a future universal tool, but the implemented alpha path is Qt + `PND1`.
 
-- Scan and identify all tag families supported by PN5180 and the firmware modules.
-- Read, dump, and write where the tag family and access state allow it.
-- Keep potentially dangerous operations explicit: write, lock, password/auth, privacy, format.
-- Let Qt and CLI share the same host library instead of duplicating serial logic.
-- Preserve raw logs and binary dumps for reproducibility.
+## Firmware
 
-## Repository Layout
-
-- `firmware/pn5180_dumper/` - ESP32-S3 Arduino firmware.
-- `host/python/pn5180_dumper/` - Python host library and CLI entrypoint.
-- `docs/` - protocol, architecture, and operation notes.
-- `scripts/` - convenience scripts.
-- `captures/` - local capture output, ignored by git.
-
-## Firmware Shape
-
-The firmware should evolve into modules with a shared interface:
+Firmware file:
 
 ```text
-TagDriver
-  name()
-  setup_rf()
-  scan()
-  identify()
-  read(plan)
-  write(plan, data)
-  dump(plan)
-  auth(credentials)
+firmware/pn5180_dumper/pn5180_dumper.ino
 ```
 
-Planned drivers:
+Implemented responsibilities:
 
-- `iso15693` - inventory, system info, block read/write, full dump, DSFID/AFI metadata.
-- `iso14443a` - Type A activation, UID/ATQA/SAK, NTAG/Ultralight reads and writes, MIFARE Classic only where auth support exists.
-- `felica` - polling/IDm first, service/block reads later.
-- `iclass` - separate compatibility work is needed because the current Arduino library has a header enum conflict with ISO15693.
-- `raw` - expert mode for manually sending low-level PN5180/tag commands.
+- PN5180 setup for ISO15693, ISO14443A, and FeliCa polling.
+- Command-driven loop, no cyclic automatic dump.
+- `PND1 DUMP` one-shot tag detection/read.
+- MIFARE Classic default-key read with fresh activation and recovery retries.
+- MIFARE Classic host-driven brute attempts.
+- MIFARE Classic safe write for data blocks.
+- Guarded block 0 write attempts for UID-changeable blanks.
+- Gen1A magic probe.
 
-## Host Shape
+MIFARE Classic layout support:
 
-The Python package is the shared host layer:
+- Mini: 20 blocks.
+- 1K/S50: 64 blocks.
+- 4K/S70: 256 blocks.
 
-- port discovery,
-- serial transport,
-- command framing,
-- response parsing,
-- dump file storage,
-- safety prompts for writes.
+4K layout is represented in code, but still needs hardware validation.
 
-The Windows Qt application can call this library directly or wrap the same protocol concepts in C++ later. The Linux console UI should stay usable over SSH/headless serial sessions.
+## Host Package
 
-Current GUI path:
-
-- `host/python/pn5180_dumper/qt_app.py` - PyQt5 Windows GUI for port selection, live serial log, parsed record table, and capture saving.
-- The scan/read/write buttons are present as disabled placeholders until firmware command protocol V2 lands.
-
-## Compatibility
-
-The current firmware still emits legacy streaming records:
+Package path:
 
 ```text
-DUMP_BEGIN
-META ...
-COMPACT_BEGIN
-...
-COMPACT_END
-DUMP_END
+host/python/pn5180_dumper/
 ```
 
-The host keeps parsing this format while the new command protocol is introduced.
+Key modules:
+
+- `capture.py`: serial record parser and capture saving.
+- `qt_app.py`: PyQt5 GUI and current main workflow.
+- `keys.py`: default/proxmark dictionary loading helpers.
+- `cli.py`: port listing and legacy capture CLI.
+
+## Qt GUI
+
+The Qt app is currently the main interface. It provides:
+
+- serial port selection and persistence;
+- reader/tag online indicators;
+- raw dump hex table;
+- dump export path;
+- write import path and write buffer viewer;
+- safe write with confirmation;
+- optional guarded UID block 0 write;
+- magic UID probe;
+- diagnostic serial log.
+
+The GUI writes MIFARE Classic blocks one-by-one and waits for `PND1 WRITE_RESULT` before sending the next block.
+
+## Capture Storage
+
+Captures are saved under:
+
+```text
+captures/<UTC timestamp>_<sha256-prefix>/
+```
+
+Each folder may contain:
+
+- `metadata.json`
+- `dump.hex`
+- `dump.bin`
+- `block_status.json`
+- `raw_serial.log`
+
+## Future Shape
+
+The target architecture still is:
+
+```text
+Firmware command engine
+  -> stable protocol
+  -> shared host client
+  -> Qt GUI and console UI
+```
+
+The next architectural step is to extract serial command transport from `qt_app.py` into a reusable host client so CLI and Qt use the same implementation.

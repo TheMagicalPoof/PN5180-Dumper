@@ -1,39 +1,34 @@
 # PN5180 Dumper
 
-PN5180 Dumper is a PN5180-based RFID/NFC tool for scanning, identifying, reading, dumping, and eventually writing supported tags with an ESP32-S3 reader and host-side UI tools.
+PN5180 Dumper is a PN5180 + ESP32-S3 RFID/NFC tool with a Python/Qt host app for reading, viewing, exporting, and writing supported tags.
 
-The current firmware still supports streaming captures over serial. The repository is now structured for a larger universal tool: ESP firmware command modules, a shared Python host library/CLI, and future Qt UI.
+Current status: `v0.3-alpha` quality. The tool is useful on the bench, but the protocol and UI are still evolving.
 
-## Supported Tags
+## Current Capabilities
 
-- `ISO15693` - full memory dump when System Info exposes block size and block count.
-- `ISO14443A` - UID detection plus best-effort reading of openly readable MIFARE/NTAG-style 16-byte reads.
-- `FELICA` - IDm detection. Memory dump is not implemented because the bundled PN5180 library exposes polling/serial detection only.
+- `ISO15693`: inventory and full memory dump when System Info exposes block size and block count.
+- `ISO14443A`: UID/ATQA/SAK detection.
+- `MIFARE Classic 1K`: tested read/dump with default key `FFFFFFFFFFFF`.
+- `MIFARE Classic 4K/S70`: firmware has block/sector layout support, but real 4K write/read coverage is still experimental until tested with hardware.
+- `MIFARE Classic write`: safe data-block write flow from Qt with optional verify.
+- `Magic UID diagnostics`: Gen1A magic backdoor probe and guarded block 0 write attempts.
+- `FeliCa`: IDm detection only; memory dump is not implemented with the bundled PN5180 library.
 
-MIFARE Classic tags are detected as ISO14443A, but memory read/write requires Crypto1 authentication. Until that driver exists, the firmware reports `memory_read=auth_required` instead of emitting a fake or empty dump.
-The Qt UI includes a `Keys/Auth` tab with a default MIFARE Classic key dictionary. Actual key testing requires the next firmware command-mode auth driver.
+## Important Limits
 
-Known limitation: `iClass` exists in the bundled PN5180 library, but it currently conflicts with the ISO15693 header when both are included in the same sketch. It will need a separate compatibility wrapper or a separate sketch before it can be enabled in the unified scanner.
+- Safe write skips sector trailer blocks because they contain keys and access bits.
+- UID/block 0 writing only works on UID-changeable blanks such as `Gen1A`, `CUID`, `FUID`, or `UFUID`; normal MIFARE Classic cards will not rewrite block 0.
+- `Probe magic UID` only detects Gen1A-style backdoor support.
+- iClass is not enabled because the bundled PN5180 library conflicts with ISO15693 headers when included in the same sketch.
+- CLI commands beyond `ports` and `capture` are placeholders; the Qt app is currently the main UI.
 
 ## Hardware
 
 - Seeed Studio XIAO ESP32-S3
 - PN5180 RFID/NFC module
-- ISO15693, ISO14443A, or FeliCa-compatible tag
-
-## Files
-
-- `firmware/pn5180_dumper/pn5180_dumper.ino` - ESP32-S3 Arduino firmware.
-- `host/python/pn5180_dumper/` - Python host package and CLI.
-- `docs/` - architecture, roadmap, and serial protocol notes.
-- `scripts/run_capture_once.bat` - Windows helper that captures one complete dump and exits.
-- `scripts/run_qt_app.bat` - Windows helper that starts the Qt5 GUI.
-- `requirements.txt` - Python dependencies.
-- `requirements-qt.txt` - optional Qt5 GUI dependency.
+- ISO15693, ISO14443A/MIFARE Classic, or FeliCa-compatible tag
 
 ## Wiring
-
-The sketch currently uses this XIAO ESP32-S3 to PN5180 pin mapping:
 
 | PN5180 signal | XIAO ESP32-S3 pin |
 | --- | --- |
@@ -44,21 +39,32 @@ The sketch currently uses this XIAO ESP32-S3 to PN5180 pin mapping:
 | BUSY | 3 |
 | RST | 4 |
 
-## Usage
-
-Install the Python dependency:
+## Install
 
 ```powershell
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-qt.txt
 ```
 
-Flash `firmware/pn5180_dumper/pn5180_dumper.ino` to the board, connect the board over USB, then run:
+Flash `firmware/pn5180_dumper/pn5180_dumper.ino` to the XIAO ESP32-S3.
+
+## Run Qt UI
 
 ```powershell
-.\scripts\run_capture_once.bat
+.\scripts\run_qt_app.bat
 ```
 
-The host CLI can list ports and run the current streaming capture path:
+The Qt app:
+
+- remembers the last selected serial port;
+- uses baud rate `460800`;
+- saves captures to `captures/`;
+- displays raw dump data as a hex table;
+- exports `dump.bin`;
+- writes loaded dumps back to MIFARE Classic-compatible blanks.
+
+## CLI
+
+The CLI can list ports and capture protocol records:
 
 ```powershell
 $env:PYTHONPATH = "host/python"
@@ -66,37 +72,52 @@ python -m pn5180_dumper.cli ports
 python -m pn5180_dumper.cli capture --auto-port --once
 ```
 
-Start the Qt5 GUI on Windows:
-
-```powershell
-pip install -r requirements.txt -r requirements-qt.txt
-.\scripts\run_qt_app.bat
-```
-
-The Qt UI remembers the last selected serial port. If no saved port exists yet, it prefers a non-`COM1` port when available.
-The GUI always uses the firmware baud rate `460800` and stores captures in `captures/`.
-
-If auto-detection cannot choose the port, pass it explicitly:
-
-```powershell
-python capture_dump.py --port COM6 --once
-```
+Reserved commands such as `scan`, `read`, `write`, and `dump` are not wired into the CLI yet.
 
 ## Output
 
-Each successful capture is saved under `captures/<timestamp>_<uid>/`:
+Each successful capture is saved under:
 
-- `metadata.json` - tag metadata and SHA-256 when a binary dump was captured.
-- `dump.hex` - formatted hex dump, when readable memory data was captured.
-- `dump.bin` - raw binary dump, when readable memory data was captured.
-- `raw_serial.log` - full serial log from the board.
+```text
+captures/<UTC timestamp>_<sha256-prefix>/
+```
 
-`captures/` is ignored by git because real RFID dumps can contain private tag data.
+Files:
 
-## Development Direction
+- `metadata.json`: tag metadata, dump size, and SHA-256.
+- `dump.hex`: formatted hex dump.
+- `dump.bin`: raw binary dump.
+- `block_status.json`: per-block status from the parser.
+- `raw_serial.log`: full serial/protocol log.
+
+`captures/` is ignored by git because real RFID dumps can contain private data.
+
+## Buying Blank Tags
+
+For UID cloning, search for explicit wording:
+
+- `MIFARE Classic 1K Gen1A UID changeable`
+- `MIFARE Classic 4K S70 UID changeable`
+- `Magic UID`
+- `CUID`
+- `FUID`
+- `UFUID`
+- `Block 0 writable`
+
+Avoid listings that only say `13.56MHz`, `S50`, `S70`, or `MIFARE Classic` without `UID changeable` or `magic`.
+
+## Project Layout
+
+- `firmware/pn5180_dumper/pn5180_dumper.ino`: ESP32-S3 Arduino firmware.
+- `host/python/pn5180_dumper/`: Python host package, capture parser, CLI, and Qt UI.
+- `docs/`: architecture, roadmap, and serial protocol notes.
+- `scripts/run_qt_app.bat`: Windows Qt launcher.
+- `scripts/run_capture_once.bat`: legacy one-shot capture helper.
+
+## Development Notes
 
 See:
 
-- `docs/ARCHITECTURE.md` - target firmware/host/UI structure.
-- `docs/SERIAL_PROTOCOL.md` - legacy stream format and planned command protocol V2.
-- `docs/ROADMAP.md` - phased implementation plan.
+- `docs/ARCHITECTURE.md`
+- `docs/SERIAL_PROTOCOL.md`
+- `docs/ROADMAP.md`

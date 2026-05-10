@@ -1,6 +1,6 @@
 [project]
 name = "pn5180-dumper"
-version = "0.2.0"
+version = "0.3.0a1"
 description = "Host tools for PN5180 Dumper"
 requires-python = ">=3.10"
 dependencies = [
