@@ -12,6 +12,28 @@ READER_READY protocols=ISO15693,ISO14443A,FELICA device=XIAO-ESP32-S3
 
 The firmware no longer performs cyclic reads by itself. The host must send commands.
 
+## Scan Command
+
+Request:
+
+```text
+PND1 SCAN
+```
+
+Typical response:
+
+```text
+TAG_DETECTED type=ISO14443A protocol=ISO14443A uid=C363AE0E uid_length=4 atqa=0400 sak=08 family=MIFARE_CLASSIC_1K
+```
+
+When no tag is present:
+
+```text
+INFO no_card
+```
+
+`SCAN` only detects the current tag and does not read memory or create a dump.
+
 ## Dump Command
 
 Request:
@@ -59,6 +81,8 @@ Request:
 
 ```text
 PND1 BRUTE <block> <A|B> <12-hex-key>
+PND1 BRUTE_SECTOR <block> <A|B> <12-hex-key>
+PND1 BRUTE_BATCH <block> <start-attempt-index> <batch-id> <A|B><12-hex-key> [...]
 ```
 
 Response:
@@ -67,16 +91,21 @@ Response:
 PND1 BRUTE_RESULT block=15 key_type=A key=FFFFFFFFFFFF status=ok data=00112233445566778899AABBCCDDEEFF
 PND1 BRUTE_RESULT block=15 key_type=A key=FFFFFFFFFFFF status=auth_failed
 PND1 BRUTE_RESULT block=15 key_type=A key=FFFFFFFFFFFF status=read_failed
+PND1 BRUTE_SECTOR_END sector=3 key_type=A key=FFFFFFFFFFFF
+PND1 BRUTE_BATCH_END block=15 start=128 batch=42 checked=8 status=not_found
+PND1 BRUTE_BATCH_END block=15 start=128 batch=42 checked=7 status=found
 ```
 
 The Qt app queues dictionary attempts host-side and sends one command at a time.
+`BRUTE_SECTOR` authenticates through one target block, then reads all blocks in that MIFARE Classic sector after a key is found.
+`BRUTE_BATCH` accepts multiple attempts in one UART command. Each attempt token is the key type prefix (`A` or `B`) plus a 12-hex MIFARE Classic key. `batch-id` lets the host ignore stale responses. It emits normal `BRUTE_RESULT`/`BRUTE_SECTOR_END` lines when a key opens the sector, then a compact `BRUTE_BATCH_END`.
 
 ## MIFARE Classic Write
 
 Request:
 
 ```text
-PND1 WRITE <block> <32-hex-data> [VERIFY] [ALLOW0]
+PND1 WRITE <block> <32-hex-data> [VERIFY] [ALLOW0] [ALLOWTRAILER] [KEY=<12-hex-key>]
 ```
 
 Responses:
@@ -91,8 +120,10 @@ PND1 WRITE_RESULT block=0 status=ok key_type=M key=FFFFFFFFFFFF
 Safety behavior:
 
 - Sector trailers are always skipped.
+- Sector trailers are written only when `ALLOWTRAILER` is present.
 - Block 0 is skipped unless `ALLOW0` is present.
 - `ALLOW0` is meant only for UID-changeable blanks.
+- `KEY=<12-hex-key>` selects the authentication key for the write command; default is `FFFFFFFFFFFF`.
 - `key_type=M` means the Gen1A magic fallback wrote block 0.
 
 Known block 0 failure statuses:

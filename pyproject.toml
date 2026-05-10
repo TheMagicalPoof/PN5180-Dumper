@@ -21,3 +21,6 @@ package-dir = {"" = "host/python"}
 
 [tool.setuptools.packages.find]
 where = ["host/python"]
+
+[tool.setuptools.package-data]
+pn5180_dumper = ["data/*.json"]

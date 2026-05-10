@@ -1,11 +1,22 @@
-from pn5180_dumper.keys import DEFAULT_MIFARE_CLASSIC_KEYS, normalize_mifare_key, parse_key_list
+from pn5180_dumper.keys import (
+    DEFAULT_MIFARE_CLASSIC_KEYS,
+    load_local_mfc_keys,
+    load_proxmark_mfc_keys,
+    normalize_mifare_key,
+    parse_key_list,
+)
 
 
 def test_default_keys_are_valid_and_unique() -> None:
     parsed = parse_key_list("\n".join(DEFAULT_MIFARE_CLASSIC_KEYS))
     assert parsed == DEFAULT_MIFARE_CLASSIC_KEYS
     assert len(parsed) == len(set(parsed))
-    assert len(parsed) == 100
+    assert len(parsed) > 4000
+
+
+def test_keys_are_loaded_from_local_bundle() -> None:
+    assert load_local_mfc_keys(limit=2) == DEFAULT_MIFARE_CLASSIC_KEYS[:2]
+    assert load_proxmark_mfc_keys(limit=2) == DEFAULT_MIFARE_CLASSIC_KEYS[:2]
 
 
 def test_parse_key_list_normalizes_and_deduplicates() -> None:

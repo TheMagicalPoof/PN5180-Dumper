@@ -36,7 +36,7 @@ def test_mifare_compact_block_statuses_are_parsed() -> None:
     assert len(capture.compact_hex_lines) == 3
 
 
-def test_save_capture_uses_timestamp_and_hash_folder(tmp_path) -> None:
+def test_save_capture_uses_hash_and_timestamp_folder(tmp_path) -> None:
     capture = feed_capture(
         [
             "DUMP_BEGIN",
@@ -51,9 +51,9 @@ def test_save_capture_uses_timestamp_and_hash_folder(tmp_path) -> None:
 
     folder = save_capture(capture, tmp_path / "captures")
 
-    assert re.fullmatch(r"\d{8}T\d{6}Z_[0-9a-f]{12}", folder.name)
+    assert re.fullmatch(r"[0-9a-f]{12}_\d{8}T\d{6}Z", folder.name)
     assert (folder / "dump.bin").read_bytes() == bytes.fromhex("C363AE0E000804006263646566676869")
     metadata = json.loads((folder / "metadata.json").read_text(encoding="utf-8"))
     assert metadata["uid"] == "C363AE0E"
     assert metadata["byte_length"] == 16
-    assert metadata["sha256"].startswith(folder.name.split("_", 1)[1])
+    assert metadata["sha256"].startswith(folder.name.split("_", 1)[0])

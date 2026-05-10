@@ -20,6 +20,7 @@ Implemented responsibilities:
 
 - PN5180 setup for ISO15693, ISO14443A, and FeliCa polling.
 - Command-driven loop, no cyclic automatic dump.
+- `PND1 SCAN` lightweight tag detection without memory read.
 - `PND1 DUMP` one-shot tag detection/read.
 - MIFARE Classic default-key read with fresh activation and recovery retries.
 - MIFARE Classic host-driven brute attempts.
@@ -47,7 +48,7 @@ Key modules:
 
 - `capture.py`: serial record parser and capture saving.
 - `qt_app.py`: PyQt5 GUI and current main workflow.
-- `keys.py`: default/proxmark dictionary loading helpers.
+- `keys.py`: local bundled MIFARE Classic dictionary loading helpers; no runtime network fetch.
 - `cli.py`: port listing and legacy capture CLI.
 
 ## Qt GUI
@@ -71,7 +72,7 @@ The GUI writes MIFARE Classic blocks one-by-one and waits for `PND1 WRITE_RESULT
 Captures are saved under:
 
 ```text
-captures/<UTC timestamp>_<sha256-prefix>/
+captures/<sha256-prefix>_<UTC timestamp>/
 ```
 
 Each folder may contain:

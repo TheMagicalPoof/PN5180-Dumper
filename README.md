@@ -61,6 +61,7 @@ The Qt app:
 - displays raw dump data as a hex table;
 - exports `dump.bin`;
 - writes loaded dumps back to MIFARE Classic-compatible blanks.
+- uses a bundled local MIFARE Classic key dictionary with 4500+ keys, without downloading keys at runtime.
 
 ## CLI
 
@@ -79,7 +80,7 @@ Reserved commands such as `scan`, `read`, `write`, and `dump` are not wired into
 Each successful capture is saved under:
 
 ```text
-captures/<UTC timestamp>_<sha256-prefix>/
+captures/<sha256-prefix>_<UTC timestamp>/
 ```
 
 Files:

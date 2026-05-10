@@ -12,7 +12,7 @@
 - MIFARE Classic safe data-block write path.
 - Guarded block 0 write flow for UID-changeable blanks.
 - Gen1A magic probe.
-- Capture folder naming by timestamp + hash.
+- Capture folder naming by hash + timestamp.
 
 ## Before `v0.3.0-alpha`
 
@@ -36,7 +36,7 @@
 - Stable command protocol, likely `PND2`.
 - Versioned firmware capability handshake.
 - Better cancellation for long operations.
-- Installer/portable Windows bundle.
+- Portable Windows bundle/zip without an installer.
 - Cross-platform console UI.
 - Expanded tag support: NTAG/Ultralight pages, FeliCa services, more ISO15693 write operations.
 - Broader automated tests for parser, protocol, write queue, and UI state.

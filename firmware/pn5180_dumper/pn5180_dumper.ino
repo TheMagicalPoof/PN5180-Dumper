@@ -1156,35 +1156,36 @@ void printBruteOkResult(uint8_t block, char keyType, const uint8_t key[6], const
   Serial.println();
 }
 
-void handleMifareBruteCommand(const String &line) {
-  int cursor = 0;
-  String prefix = nextCommandToken(line, cursor);
-  String command = nextCommandToken(line, cursor);
-  String blockToken = nextCommandToken(line, cursor);
-  String keyTypeToken = nextCommandToken(line, cursor);
-  String keyToken = nextCommandToken(line, cursor);
+void printBruteBatchEnd(uint8_t block, uint16_t startIndex, const String &batchId, uint16_t checked, const __FlashStringHelper *status) {
+  Serial.print(F("PND1 BRUTE_BATCH_END block="));
+  Serial.print(block);
+  Serial.print(F(" start="));
+  Serial.print(startIndex);
+  Serial.print(F(" batch="));
+  Serial.print(batchId);
+  Serial.print(F(" checked="));
+  Serial.print(checked);
+  Serial.print(F(" status="));
+  Serial.println(status);
+}
 
-  if (prefix != F("PND1") || command != F("BRUTE") || blockToken.length() == 0 || keyTypeToken.length() == 0) {
-    Serial.println(F("PND1 BRUTE_RESULT status=bad_command"));
-    return;
+uint8_t mifareClassicSectorForBlock(uint16_t block) {
+  if (block < 128) {
+    return static_cast<uint8_t>(block / 4);
   }
+  return static_cast<uint8_t>(32 + ((block - 128) / 16));
+}
 
-  int blockValue = blockToken.toInt();
-  if (blockValue < 0 || blockValue > 255) {
-    Serial.println(F("PND1 BRUTE_RESULT status=bad_block"));
-    return;
-  }
-
-  char keyTypeChar = keyTypeToken[0] == 'B' || keyTypeToken[0] == 'b' ? 'B' : 'A';
+bool tryMifareClassicBruteKey(
+    uint8_t blockValue,
+    char keyTypeChar,
+    const uint8_t key[6],
+    bool readWholeSector,
+    bool emitFailure) {
   uint8_t keyType = keyTypeChar == 'B' ? MIFARE_KEY_B : MIFARE_KEY_A;
-  uint8_t key[6] = {0};
-  if (!parseMifareKeyText(keyToken, key)) {
-    Serial.println(F("PND1 BRUTE_RESULT status=bad_key"));
-    return;
-  }
-
   uint8_t data[MIFARE_CLASSIC_BLOCK_SIZE] = {0};
   bool authenticated = false;
+
   for (uint8_t attempt = 1; attempt <= MIFARE_CLASSIC_BRUTE_READ_RETRIES; ++attempt) {
     if (!setupRfSafe(0x00, 0x80, false, F("ISO14443A"))) {
       continue;
@@ -1196,31 +1197,147 @@ void handleMifareBruteCommand(const String &line) {
       continue;
     }
     if (uidLength != 4) {
-      printBruteResult(static_cast<uint8_t>(blockValue), keyTypeChar, key, F("uid_unsupported"));
-      return;
+      if (emitFailure) {
+        printBruteResult(blockValue, keyTypeChar, key, F("uid_unsupported"));
+      }
+      return false;
     }
 
     uint8_t uid[4] = {response[3], response[4], response[5], response[6]};
-    if (!mifareClassicAuthenticate(static_cast<uint8_t>(blockValue), keyType, key, uid)) {
+    if (!mifareClassicAuthenticate(blockValue, keyType, key, uid)) {
       mifareHaltSafe();
       delay(8);
       continue;
     }
     authenticated = true;
 
-    if (mifareClassicReadBlockSafe(static_cast<uint8_t>(blockValue), data)) {
+    if (mifareClassicReadBlockSafe(blockValue, data)) {
+      if (readWholeSector) {
+        uint8_t sector = mifareClassicSectorForBlock(blockValue);
+        uint16_t firstBlock = mifareClassicSectorFirstBlock(sector);
+        uint8_t blockCount = mifareClassicSectorBlockCount(sector);
+        printBruteOkResult(blockValue, keyTypeChar, key, data);
+        for (uint8_t offset = 0; offset < blockCount; ++offset) {
+          uint16_t sectorBlock = firstBlock + offset;
+          if (sectorBlock == blockValue || sectorBlock > 255) {
+            continue;
+          }
+          uint8_t sectorData[MIFARE_CLASSIC_BLOCK_SIZE] = {0};
+          if (mifareClassicReadBlockSafe(static_cast<uint8_t>(sectorBlock), sectorData)) {
+            printBruteOkResult(static_cast<uint8_t>(sectorBlock), keyTypeChar, key, sectorData);
+          } else {
+            printBruteResult(static_cast<uint8_t>(sectorBlock), keyTypeChar, key, F("read_failed"));
+          }
+        }
+        mifareHaltSafe();
+        Serial.print(F("PND1 BRUTE_SECTOR_END sector="));
+        Serial.print(sector);
+        Serial.print(F(" key_type="));
+        Serial.print(keyTypeChar);
+        Serial.print(F(" key="));
+        printMifareKey(key);
+        Serial.println();
+        return true;
+      }
       mifareHaltSafe();
-      printBruteOkResult(static_cast<uint8_t>(blockValue), keyTypeChar, key, data);
-      return;
+      printBruteOkResult(blockValue, keyTypeChar, key, data);
+      return true;
     }
     mifareHaltSafe();
     delay(8);
   }
 
-  printBruteResult(static_cast<uint8_t>(blockValue), keyTypeChar, key, authenticated ? F("read_failed") : F("auth_failed"));
+  if (emitFailure) {
+    printBruteResult(blockValue, keyTypeChar, key, authenticated ? F("read_failed") : F("auth_failed"));
+  }
+  return false;
 }
 
-void printWriteResult(uint16_t block, const __FlashStringHelper *status, char keyType = '-') {
+void handleMifareBruteCommand(const String &line, bool readWholeSector = false) {
+  int cursor = 0;
+  String prefix = nextCommandToken(line, cursor);
+  String command = nextCommandToken(line, cursor);
+  String blockToken = nextCommandToken(line, cursor);
+  String keyTypeToken = nextCommandToken(line, cursor);
+  String keyToken = nextCommandToken(line, cursor);
+
+  if (prefix != F("PND1") ||
+      !(command == F("BRUTE") || command == F("BRUTE_SECTOR")) ||
+      blockToken.length() == 0 ||
+      keyTypeToken.length() == 0) {
+    Serial.println(F("PND1 BRUTE_RESULT status=bad_command"));
+    return;
+  }
+
+  int blockValue = blockToken.toInt();
+  if (blockValue < 0 || blockValue > 255) {
+    Serial.println(F("PND1 BRUTE_RESULT status=bad_block"));
+    return;
+  }
+
+  char keyTypeChar = keyTypeToken[0] == 'B' || keyTypeToken[0] == 'b' ? 'B' : 'A';
+  uint8_t key[6] = {0};
+  if (!parseMifareKeyText(keyToken, key)) {
+    Serial.println(F("PND1 BRUTE_RESULT status=bad_key"));
+    return;
+  }
+
+  tryMifareClassicBruteKey(static_cast<uint8_t>(blockValue), keyTypeChar, key, readWholeSector, true);
+}
+
+void handleMifareBruteBatchCommand(const String &line) {
+  int cursor = 0;
+  String prefix = nextCommandToken(line, cursor);
+  String command = nextCommandToken(line, cursor);
+  String blockToken = nextCommandToken(line, cursor);
+  String startToken = nextCommandToken(line, cursor);
+  String batchToken = nextCommandToken(line, cursor);
+
+  if (prefix != F("PND1") ||
+      command != F("BRUTE_BATCH") ||
+      blockToken.length() == 0 ||
+      startToken.length() == 0 ||
+      batchToken.length() == 0) {
+    Serial.println(F("PND1 BRUTE_BATCH_END status=bad_command"));
+    return;
+  }
+
+  int blockValue = blockToken.toInt();
+  if (blockValue < 0 || blockValue > 255) {
+    Serial.println(F("PND1 BRUTE_BATCH_END status=bad_block"));
+    return;
+  }
+
+  uint16_t startIndex = static_cast<uint16_t>(startToken.toInt());
+  uint16_t checked = 0;
+  while (cursor < static_cast<int>(line.length())) {
+    String attemptToken = nextCommandToken(line, cursor);
+    if (attemptToken.length() == 0) {
+      break;
+    }
+    if (attemptToken.length() != 13) {
+      printBruteBatchEnd(static_cast<uint8_t>(blockValue), startIndex, batchToken, checked, F("bad_key"));
+      return;
+    }
+
+    char keyTypeChar = attemptToken[0] == 'B' || attemptToken[0] == 'b' ? 'B' : 'A';
+    uint8_t key[6] = {0};
+    if (!parseMifareKeyText(attemptToken.substring(1), key)) {
+      printBruteBatchEnd(static_cast<uint8_t>(blockValue), startIndex, batchToken, checked, F("bad_key"));
+      return;
+    }
+
+    ++checked;
+    if (tryMifareClassicBruteKey(static_cast<uint8_t>(blockValue), keyTypeChar, key, true, false)) {
+      printBruteBatchEnd(static_cast<uint8_t>(blockValue), startIndex, batchToken, checked, F("found"));
+      return;
+    }
+  }
+
+  printBruteBatchEnd(static_cast<uint8_t>(blockValue), startIndex, batchToken, checked, F("not_found"));
+}
+
+void printWriteResult(uint16_t block, const __FlashStringHelper *status, char keyType = '-', const uint8_t *key = nullptr) {
   Serial.print(F("PND1 WRITE_RESULT block="));
   Serial.print(block);
   Serial.print(F(" status="));
@@ -1229,7 +1346,7 @@ void printWriteResult(uint16_t block, const __FlashStringHelper *status, char ke
     Serial.print(F(" key_type="));
     Serial.print(keyType);
     Serial.print(F(" key="));
-    printMifareKey(MIFARE_CLASSIC_KEYS[0]);
+    printMifareKey(key ? key : MIFARE_CLASSIC_KEYS[0]);
   }
   Serial.println();
 }
@@ -1392,16 +1509,28 @@ void handleMifareWriteCommand(const String &line) {
 
   bool verify = false;
   bool allowBlock0 = false;
+  bool allowTrailer = false;
+  uint8_t commandKey[6] = {0};
+  const uint8_t *writeKey = MIFARE_CLASSIC_KEYS[0];
   while (cursor < static_cast<int>(line.length())) {
     String option = nextCommandToken(line, cursor);
     if (option == F("VERIFY")) {
       verify = true;
     } else if (option == F("ALLOW0")) {
       allowBlock0 = true;
+    } else if (option == F("ALLOWTRAILER")) {
+      allowTrailer = true;
+    } else if (option.startsWith(F("KEY="))) {
+      if (!parseMifareKeyText(option.substring(4), commandKey)) {
+        printWriteResult(static_cast<uint16_t>(blockValue), F("bad_key"));
+        return;
+      }
+      writeKey = commandKey;
     }
   }
 
-  if ((blockValue == 0 && !allowBlock0) || mifareClassicIsTrailerBlock(static_cast<uint16_t>(blockValue))) {
+  if ((blockValue == 0 && !allowBlock0) ||
+      (mifareClassicIsTrailerBlock(static_cast<uint16_t>(blockValue)) && !allowTrailer)) {
     printWriteResult(static_cast<uint16_t>(blockValue), F("skipped_protected"));
     return;
   }
@@ -1419,10 +1548,10 @@ void handleMifareWriteCommand(const String &line) {
       if (writeMifareClassicBlockFresh(
               static_cast<uint8_t>(blockValue),
               keyType,
-              MIFARE_CLASSIC_KEYS[0],
+              writeKey,
               data,
               verify)) {
-        printWriteResult(static_cast<uint16_t>(blockValue), F("ok"), keyTypeChar);
+        printWriteResult(static_cast<uint16_t>(blockValue), F("ok"), keyTypeChar, writeKey);
         return;
       }
       delay(10);
@@ -1453,6 +1582,84 @@ void handleMagicProbeCommand() {
   mifareHaltSafe();
 }
 
+bool scanIso14443AIfPresent() {
+  if (!setupRfSafe(0x00, 0x80, false, F("ISO14443A"))) {
+    return false;
+  }
+
+  uint8_t response[10] = {0};
+  uint8_t uidLength = activateTypeASafe(response, 1);
+  if (uidLength == 0) {
+    return false;
+  }
+
+  uint8_t uid[10] = {0};
+  for (uint8_t i = 0; i < uidLength && i < sizeof(uid); ++i) {
+    uid[i] = response[3 + i];
+  }
+
+  uint8_t atqa0 = response[0];
+  uint8_t atqa1 = response[1];
+  uint8_t sak = response[2];
+
+  Serial.print(F("TAG_DETECTED type=ISO14443A protocol=ISO14443A uid="));
+  printHexCompact(uid, uidLength);
+  Serial.print(F(" uid_length="));
+  Serial.print(uidLength);
+  Serial.print(F(" atqa="));
+  printHexByte(atqa0);
+  printHexByte(atqa1);
+  Serial.print(F(" sak="));
+  printHexByte(sak);
+  Serial.print(F(" family="));
+  Serial.println(classifyIso14443A(sak));
+
+  mifareHaltSafe();
+  return true;
+}
+
+bool scanIso15693IfPresent() {
+  uint8_t uid[8] = {0};
+  if (!setupRfSafe(0x0D, 0x8D, true, F("ISO15693"))) {
+    return false;
+  }
+
+  ISO15693ErrorCode rc = getIso15693InventorySafe(uid);
+  if (rc != ISO15693_EC_OK) {
+    return false;
+  }
+
+  Serial.print(F("TAG_DETECTED type=ISO15693 protocol=ISO15693 uid="));
+  printUidReversedCompact(uid, 8);
+  Serial.print(F(" uid_length=8 rc="));
+  Serial.println(static_cast<int>(rc));
+  return true;
+}
+
+bool scanFeliCaIfPresent() {
+  if (!setupRfSafe(0x09, 0x89, false, F("FELICA"))) {
+    return false;
+  }
+
+  uint8_t uid[20] = {0};
+  uint8_t uidLength = nfcFeliCa.readCardSerial(uid);
+  if (uidLength == 0) {
+    return false;
+  }
+
+  Serial.print(F("TAG_DETECTED type=FELICA protocol=FELICA uid="));
+  printHexCompact(uid, uidLength);
+  Serial.print(F(" uid_length="));
+  Serial.println(uidLength);
+  return true;
+}
+
+void handleScanCommand() {
+  if (!(scanIso14443AIfPresent() || scanIso15693IfPresent() || scanFeliCaIfPresent())) {
+    Serial.println(F("INFO no_card"));
+  }
+}
+
 bool processSerialCommand() {
   if (!Serial.available()) {
     return false;
@@ -1468,8 +1675,20 @@ bool processSerialCommand() {
     }
     return true;
   }
+  if (line == F("PND1 SCAN")) {
+    handleScanCommand();
+    return true;
+  }
+  if (line.startsWith(F("PND1 BRUTE_BATCH"))) {
+    handleMifareBruteBatchCommand(line);
+    return true;
+  }
+  if (line.startsWith(F("PND1 BRUTE_SECTOR"))) {
+    handleMifareBruteCommand(line, true);
+    return true;
+  }
   if (line.startsWith(F("PND1 BRUTE"))) {
-    handleMifareBruteCommand(line);
+    handleMifareBruteCommand(line, false);
     return true;
   }
   if (line.startsWith(F("PND1 WRITE"))) {
@@ -1597,6 +1816,9 @@ MifareClassicDumpResult readMifareClassicWithDictionary(
 
   for (uint16_t block = 0; block < result.blockCount; ++block) {
     if (blockStatus[block] == MIFARE_BLOCK_STATUS_READ) {
+      continue;
+    }
+    if (blockStatus[block] == MIFARE_BLOCK_STATUS_KEY_MISSING) {
       continue;
     }
 
@@ -1903,7 +2125,7 @@ bool dumpFeliCaIfPresent() {
 
 void setup() {
   Serial.begin(SERIAL_BAUD);
-  Serial.setTimeout(20);
+  Serial.setTimeout(120);
   delay(1000);
 
   SPI.begin(PN5180_SCK_PIN, PN5180_MISO_PIN, PN5180_MOSI_PIN, PN5180_NSS_PIN);
