@@ -1,8 +1,11 @@
 import json
+import sys
 from importlib import resources
+from pathlib import Path
 
 
 LOCAL_MIFARE_CLASSIC_KEYS_RESOURCE = "data/mifare_classic_keys.json"
+EXTERNAL_MIFARE_CLASSIC_KEYS_FILE = "mifare_keys.json"
 
 
 def normalize_mifare_key(value: str) -> str:
@@ -27,10 +30,33 @@ def parse_key_list(text: str) -> list[str]:
     return keys
 
 
+def _external_key_paths() -> list[Path]:
+    paths: list[Path] = []
+    if getattr(sys, "frozen", False):
+        paths.append(Path(sys.executable).resolve().parent / EXTERNAL_MIFARE_CLASSIC_KEYS_FILE)
+    paths.append(Path.cwd() / EXTERNAL_MIFARE_CLASSIC_KEYS_FILE)
+    return paths
+
+
+def _keys_from_json_text(text: str) -> list[str]:
+    payload = json.loads(text)
+    if isinstance(payload, dict):
+        values = payload.get("keys", [])
+    else:
+        values = payload
+    if not isinstance(values, list):
+        raise ValueError("mifare_keys.json must contain a JSON list or an object with a 'keys' list")
+    return parse_key_list("\n".join(str(value) for value in values))
+
+
 def load_local_mfc_keys(limit: int | None = None) -> list[str]:
+    for path in _external_key_paths():
+        if path.is_file():
+            keys = _keys_from_json_text(path.read_text(encoding="utf-8"))
+            return keys[:limit] if limit is not None else keys
+
     resource = resources.files("pn5180_dumper").joinpath(LOCAL_MIFARE_CLASSIC_KEYS_RESOURCE)
-    payload = json.loads(resource.read_text(encoding="utf-8"))
-    keys = parse_key_list("\n".join(payload["keys"]))
+    keys = _keys_from_json_text(resource.read_text(encoding="utf-8"))
     if limit is not None:
         return keys[:limit]
     return keys

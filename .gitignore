@@ -11,3 +11,7 @@ captures/
 # Generated archives.
 *.zip
 
+# Local release build outputs.
+dist/
+build/
+*.exe
