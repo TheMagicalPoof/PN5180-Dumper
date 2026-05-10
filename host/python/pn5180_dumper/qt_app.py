@@ -8,7 +8,7 @@ import serial
 from serial.tools import list_ports
 
 from PyQt5.QtCore import QSettings, Qt, QThread, QTimer, pyqtSignal
-from PyQt5.QtGui import QBrush, QColor, QIcon, QKeySequence
+from PyQt5.QtGui import QBrush, QColor, QFont, QIcon, QKeySequence
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
