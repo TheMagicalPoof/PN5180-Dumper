@@ -6,6 +6,7 @@ $buildRoot = Join-Path $root "build\python-qt"
 $pyinstallerWork = Join-Path $root "build\pyinstaller"
 $entry = Join-Path $buildRoot "pndumper_qt_entry.py"
 $icon = Join-Path $buildRoot "d20.ico"
+$logoSource = Join-Path $root "scripts\d20.png"
 $keysSource = Join-Path $root "host\python\pn5180_dumper\data\mifare_classic_keys.json"
 $keysTarget = Join-Path $dist "mifare_keys.json"
 $readme = Join-Path $dist "README_RUN.txt"
@@ -41,6 +42,7 @@ python -m PyInstaller `
     --workpath $pyinstallerWork `
     --specpath $pyinstallerWork `
     --add-data "$keysSource;pn5180_dumper\data" `
+    --add-data "$logoSource;assets" `
     $entry
 
 Copy-Item -LiteralPath $keysSource -Destination $keysTarget -Force

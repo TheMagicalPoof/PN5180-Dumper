@@ -8,7 +8,7 @@ import serial
 from serial.tools import list_ports
 
 from PyQt5.QtCore import QSettings, Qt, QThread, QTimer, pyqtSignal
-from PyQt5.QtGui import QBrush, QColor, QFont, QKeySequence
+from PyQt5.QtGui import QBrush, QColor, QFont, QIcon, QKeySequence, QPixmap
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -47,6 +47,28 @@ BRUTE_ATTEMPT_TIMEOUT_MS = 6000
 BRUTE_BATCH_TIMEOUT_MS = 60000
 BRUTE_BATCH_SIZE = 8
 BRUTE_PROGRESS_PATH = Path("captures") / "brute_progress.json"
+APP_TITLE = "PNDumper by Magical_Poof"
+LOGO_FILE_NAME = "d20.png"
+
+
+def app_logo_path() -> Path | None:
+    candidates: list[Path] = []
+    bundle_root = getattr(sys, "_MEIPASS", None)
+    if bundle_root:
+        candidates.append(Path(bundle_root) / "assets" / LOGO_FILE_NAME)
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().parent / LOGO_FILE_NAME)
+    project_root = Path(__file__).resolve().parents[3]
+    candidates.extend(
+        [
+            Path.cwd() / LOGO_FILE_NAME,
+            project_root / "scripts" / LOGO_FILE_NAME,
+        ]
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
 
 
 class HexTableWidget(QTableWidget):
@@ -203,8 +225,11 @@ class MainWindow(QMainWindow):
         self.read_running = False
         self.last_logged_device_state: str | None = None
 
-        self.setWindowTitle(f"PN5180 Dumper Qt5 v{__version__}")
+        self.setWindowTitle(APP_TITLE)
         self.resize(1080, 720)
+        self.logo_path = app_logo_path()
+        if self.logo_path:
+            self.setWindowIcon(QIcon(str(self.logo_path)))
         self.apply_dark_theme()
 
         self.reader_indicator = QLabel()
@@ -286,6 +311,8 @@ class MainWindow(QMainWindow):
         root = QWidget()
         main_layout = QVBoxLayout(root)
 
+        header = self._build_header()
+
         connection_box = QGroupBox("Connection")
         connection_layout = QGridLayout(connection_box)
         reader_row = QHBoxLayout()
@@ -348,6 +375,7 @@ class MainWindow(QMainWindow):
         log_layout = QVBoxLayout(log_box)
         log_layout.addWidget(self.log_view)
 
+        main_layout.addWidget(header)
         main_layout.addWidget(connection_box)
         main_layout.addWidget(devices_box)
         main_layout.addWidget(mode_box, 5)
@@ -355,6 +383,40 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.status_label)
 
         self.setCentralWidget(root)
+
+    def _build_header(self) -> QWidget:
+        header = QWidget()
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(2, 0, 2, 0)
+        layout.setSpacing(10)
+
+        logo = QLabel()
+        logo.setFixedSize(42, 42)
+        if self.logo_path:
+            pixmap = QPixmap(str(self.logo_path))
+            if not pixmap.isNull():
+                logo.setPixmap(pixmap.scaled(40, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+
+        title = QLabel(APP_TITLE)
+        title_font = QFont()
+        title_font.setPointSize(16)
+        title_font.setBold(True)
+        title.setFont(title_font)
+        title.setStyleSheet("color: #f0f5fb; letter-spacing: 0.5px;")
+
+        subtitle = QLabel(f"Stable Python/Qt build v{__version__}")
+        subtitle.setStyleSheet("color: #8fa6bd;")
+
+        text_box = QVBoxLayout()
+        text_box.setContentsMargins(0, 0, 0, 0)
+        text_box.setSpacing(0)
+        text_box.addWidget(title)
+        text_box.addWidget(subtitle)
+
+        layout.addWidget(logo)
+        layout.addLayout(text_box)
+        layout.addStretch(1)
+        return header
 
     def apply_dark_theme(self) -> None:
         QApplication.instance().setStyleSheet("""
