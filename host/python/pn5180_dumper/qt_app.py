@@ -8,7 +8,7 @@ import serial
 from serial.tools import list_ports
 
 from PyQt5.QtCore import QSettings, Qt, QThread, QTimer, pyqtSignal
-from PyQt5.QtGui import QBrush, QColor, QFont, QIcon, QKeySequence, QPixmap
+from PyQt5.QtGui import QBrush, QColor, QIcon, QKeySequence
 from PyQt5.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -311,8 +311,6 @@ class MainWindow(QMainWindow):
         root = QWidget()
         main_layout = QVBoxLayout(root)
 
-        header = self._build_header()
-
         connection_box = QGroupBox("Connection")
         connection_layout = QGridLayout(connection_box)
         reader_row = QHBoxLayout()
@@ -375,7 +373,6 @@ class MainWindow(QMainWindow):
         log_layout = QVBoxLayout(log_box)
         log_layout.addWidget(self.log_view)
 
-        main_layout.addWidget(header)
         main_layout.addWidget(connection_box)
         main_layout.addWidget(devices_box)
         main_layout.addWidget(mode_box, 5)
@@ -383,40 +380,6 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(self.status_label)
 
         self.setCentralWidget(root)
-
-    def _build_header(self) -> QWidget:
-        header = QWidget()
-        layout = QHBoxLayout(header)
-        layout.setContentsMargins(2, 0, 2, 0)
-        layout.setSpacing(10)
-
-        logo = QLabel()
-        logo.setFixedSize(42, 42)
-        if self.logo_path:
-            pixmap = QPixmap(str(self.logo_path))
-            if not pixmap.isNull():
-                logo.setPixmap(pixmap.scaled(40, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-
-        title = QLabel(APP_TITLE)
-        title_font = QFont()
-        title_font.setPointSize(16)
-        title_font.setBold(True)
-        title.setFont(title_font)
-        title.setStyleSheet("color: #f0f5fb; letter-spacing: 0.5px;")
-
-        subtitle = QLabel(f"Stable Python/Qt build v{__version__}")
-        subtitle.setStyleSheet("color: #8fa6bd;")
-
-        text_box = QVBoxLayout()
-        text_box.setContentsMargins(0, 0, 0, 0)
-        text_box.setSpacing(0)
-        text_box.addWidget(title)
-        text_box.addWidget(subtitle)
-
-        layout.addWidget(logo)
-        layout.addLayout(text_box)
-        layout.addStretch(1)
-        return header
 
     def apply_dark_theme(self) -> None:
         QApplication.instance().setStyleSheet("""
