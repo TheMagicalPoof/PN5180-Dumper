@@ -36,6 +36,26 @@ def test_mifare_compact_block_statuses_are_parsed() -> None:
     assert len(capture.compact_hex_lines) == 3
 
 
+def test_odd_length_hex_line_is_ignored() -> None:
+    capture = feed_capture(
+        [
+            "DUMP_BEGIN",
+            "META type=ISO14443A protocol=ISO14443A uid=C363AE0E uid_length=4 rc=0 block_size=16 num_blocks=2",
+            "COMPACT_BEGIN",
+            "INFO mfclassic_block block=0",
+            "C3 63 AE 0E 00 08 04 00 62 63 64 65 66 67 68 69",
+            "INFO mfclassic_block_key_missing block=1",
+            "00 00 00 00 00 00 00 00 00 00 00 0 00 00 00 00 00",
+            "COMPACT_END",
+            "DUMP_END",
+        ]
+    )
+
+    assert capture.is_complete()
+    assert capture.compact_hex_lines == ["C363AE0E000804006263646566676869"]
+    assert capture.compact_block_statuses == ["OK"]
+
+
 def test_save_capture_uses_hash_and_timestamp_folder(tmp_path) -> None:
     capture = feed_capture(
         [

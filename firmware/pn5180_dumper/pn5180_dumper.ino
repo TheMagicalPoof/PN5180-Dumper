@@ -624,29 +624,45 @@ bool setupRf(Reader &reader, const __FlashStringHelper *protocolName) {
   return false;
 }
 
+uint8_t mifareClassicSakBase(uint8_t sak) {
+  return sak & static_cast<uint8_t>(~0x20);
+}
+
 const __FlashStringHelper *classifyIso14443A(uint8_t sak) {
-  switch (sak) {
+  const bool isoDepCompatible = (sak & 0x20) != 0;
+  switch (mifareClassicSakBase(sak)) {
     case 0x00:
+      if (isoDepCompatible) {
+        return F("ISO14443_4_COMPATIBLE");
+      }
       return F("MIFARE_ULTRALIGHT_OR_NTAG");
     case 0x08:
+      if (isoDepCompatible) {
+        return F("MIFARE_CLASSIC_1K_ISO14443_4_COMPATIBLE");
+      }
       return F("MIFARE_CLASSIC_1K");
     case 0x09:
+      if (isoDepCompatible) {
+        return F("MIFARE_MINI_ISO14443_4_COMPATIBLE");
+      }
       return F("MIFARE_MINI");
     case 0x18:
+      if (isoDepCompatible) {
+        return F("MIFARE_CLASSIC_4K_ISO14443_4_COMPATIBLE");
+      }
       return F("MIFARE_CLASSIC_4K");
-    case 0x20:
-      return F("ISO14443_4_COMPATIBLE");
     default:
       return F("UNKNOWN_TYPE_A");
   }
 }
 
 bool isMifareClassicSak(uint8_t sak) {
-  return sak == 0x08 || sak == 0x09 || sak == 0x18;
+  uint8_t baseSak = mifareClassicSakBase(sak);
+  return baseSak == 0x08 || baseSak == 0x09 || baseSak == 0x18;
 }
 
 uint16_t mifareClassicBlockCount(uint8_t sak) {
-  switch (sak) {
+  switch (mifareClassicSakBase(sak)) {
     case 0x09:
       return 20;  // MIFARE Mini: 5 sectors * 4 blocks.
     case 0x18:
@@ -658,7 +674,7 @@ uint16_t mifareClassicBlockCount(uint8_t sak) {
 }
 
 uint8_t mifareClassicSectorCount(uint8_t sak) {
-  switch (sak) {
+  switch (mifareClassicSakBase(sak)) {
     case 0x09:
       return 5;
     case 0x18:

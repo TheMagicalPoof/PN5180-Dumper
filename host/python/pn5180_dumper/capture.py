@@ -143,6 +143,8 @@ def normalize_hex_line(line: str) -> str | None:
         return None
     if not re.fullmatch(r"[0-9A-Fa-f]+", compact):
         return None
+    if len(compact) % 2 != 0:
+        return None
     return compact.upper()
 
 
@@ -246,6 +248,8 @@ def detect_port(preferred: str | None) -> str:
 def dump_to_bytes(lines: list[str]) -> bytes:
     data = bytearray()
     for line in lines:
+        if len(line) % 2 != 0:
+            continue
         data.extend(bytes.fromhex(line))
     return bytes(data)
 
