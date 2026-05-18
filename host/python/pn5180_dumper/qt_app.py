@@ -222,6 +222,7 @@ class MainWindow(QMainWindow):
         self.write_running = False
         self.write_uid_block_requested = False
         self.write_uid_block_verified = False
+        self.write_protocol = "MIFARE_CLASSIC"
         self.read_running = False
         self.last_logged_device_state: str | None = None
 
@@ -1168,6 +1169,7 @@ class MainWindow(QMainWindow):
         self.write_running = False
         self.write_uid_block_requested = False
         self.write_uid_block_verified = False
+        self.write_protocol = "MIFARE_CLASSIC"
         self.write_bytes = b""
         self.write_import_path_edit.clear()
         self.populate_hex_table(self.write_hex_table, b"")
@@ -1480,27 +1482,42 @@ class MainWindow(QMainWindow):
         if not self.write_bytes:
             QMessageBox.information(self, "No data", "Load a dump file first.")
             return
-        if len(self.write_bytes) % 16 != 0:
-            QMessageBox.warning(self, "Invalid dump", "MIFARE Classic writes need a size aligned to 16-byte blocks.")
+        protocol = str((self.current_metadata or {}).get("protocol") or (self.current_metadata or {}).get("type") or "")
+        is_iso15693 = protocol.upper() == "ISO15693"
+        block_size = self._current_write_block_size(is_iso15693)
+        if block_size <= 0:
+            QMessageBox.warning(
+                self,
+                "Unknown block size",
+                "Read or refresh the current tag first so the app knows the tag block size.",
+            )
+            return
+        if len(self.write_bytes) % block_size != 0:
+            QMessageBox.warning(
+                self,
+                "Invalid dump",
+                f"Current tag writes need a size aligned to {block_size}-byte blocks.",
+            )
             return
 
         start_block = self.write_address_spin.value()
         allow_uid_block = self.write_uid_block_check.isChecked()
         self.write_uid_block_requested = False
         self.write_uid_block_verified = False
+        self.write_protocol = "ISO15693" if is_iso15693 else "MIFARE_CLASSIC"
         queue: list[tuple[int, bytes]] = []
         skipped: list[int] = []
-        for source_block, offset in enumerate(range(0, len(self.write_bytes), 16)):
+        for source_block, offset in enumerate(range(0, len(self.write_bytes), block_size)):
             target_block = start_block + source_block
-            if target_block == 0 and not allow_uid_block:
+            if not is_iso15693 and target_block == 0 and not allow_uid_block:
                 skipped.append(target_block)
                 continue
-            if self._is_mifare_classic_trailer_block(target_block):
+            if not is_iso15693 and self._is_mifare_classic_trailer_block(target_block):
                 skipped.append(target_block)
                 continue
-            if target_block == 0:
+            if not is_iso15693 and target_block == 0:
                 self.write_uid_block_requested = True
-            queue.append((target_block, self.write_bytes[offset:offset + 16]))
+            queue.append((target_block, self.write_bytes[offset:offset + block_size]))
 
         if not queue:
             QMessageBox.warning(self, "Nothing to write", "All blocks were skipped by safe-write protection.")
@@ -1511,6 +1528,8 @@ class MainWindow(QMainWindow):
             "Confirm write",
             (
                 f"Write {len(queue)} data blocks to the tag now?\n\n"
+                f"Protocol: {self.write_protocol}\n"
+                f"Block size: {block_size} bytes\n"
                 f"Skipped protected blocks: {len(skipped)}.\n"
                 "Only use this on tags you own or are authorized to copy."
             ),
@@ -1520,7 +1539,7 @@ class MainWindow(QMainWindow):
         if answer != QMessageBox.Yes:
             return
 
-        if allow_uid_block and any(block == 0 for block, _data in queue):
+        if not is_iso15693 and allow_uid_block and any(block == 0 for block, _data in queue):
             answer = QMessageBox.question(
                 self,
                 "Write UID block 0?",
@@ -1584,6 +1603,9 @@ class MainWindow(QMainWindow):
 
         block, data = self.write_queue.pop(0)
         verify = " VERIFY" if self.write_verify_check.isChecked() else ""
+        if self.write_protocol == "ISO15693":
+            self.worker.send_command(f"PND1 WRITE_ISO15693 {block} {data.hex().upper()}{verify}")
+            return
         allow_uid = " ALLOW0" if block == 0 and self.write_uid_block_check.isChecked() else ""
         self.worker.send_command(f"PND1 WRITE {block} {data.hex().upper()}{verify}{allow_uid}")
 
@@ -1634,6 +1656,15 @@ class MainWindow(QMainWindow):
         if block < 128:
             return block % 4 == 3
         return (block - 128) % 16 == 15
+
+    def _current_write_block_size(self, is_iso15693: bool) -> int:
+        if is_iso15693:
+            value = (self.current_metadata or {}).get("block_size")
+            try:
+                return int(value)
+            except (TypeError, ValueError):
+                return 0
+        return 16
 
     def populate_hex_table(
         self,

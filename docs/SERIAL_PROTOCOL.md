@@ -132,6 +132,32 @@ Known block 0 failure statuses:
 - `magic_write_failed`: backdoor opened but block write failed.
 - `magic_verify_failed`: write appeared to run but verify did not match.
 
+## ISO15693 Write
+
+Request:
+
+```text
+PND1 WRITE_ISO15693 <block> <hex-data> [VERIFY]
+```
+
+`hex-data` must match the current ISO15693 tag block size reported by `META block_size=...`.
+For common 4-byte ISO15693 tags this is 8 hex characters per block.
+
+Responses:
+
+```text
+PND1 WRITE_RESULT block=4 status=ok protocol=ISO15693 rc=0
+PND1 WRITE_RESULT block=4 status=block_locked protocol=ISO15693 rc=18
+PND1 WRITE_RESULT block=4 status=bad_data protocol=ISO15693 rc=15
+PND1 WRITE_RESULT block=4 status=failed protocol=ISO15693 rc=15
+```
+
+Safety behavior:
+
+- The host no longer applies MIFARE Classic UID/trailer protection to ISO15693 tags.
+- Locked ISO15693 blocks are not bypassed; firmware reports `block_locked`.
+- `VERIFY` reads the block back and compares it with the requested data.
+
 ## Magic Probe
 
 Request:

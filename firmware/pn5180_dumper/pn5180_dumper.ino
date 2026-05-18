@@ -18,6 +18,7 @@ static constexpr uint32_t ISO15693_RX_TIMEOUT_MS = 120;
 static constexpr uint8_t MAX_MULTI_READ_RETRIES = 6;
 static constexpr uint8_t MAX_SINGLE_READ_RETRIES = 12;
 static constexpr uint16_t ISO15693_READ_BUFFER_BYTES = 1024;
+static constexpr uint8_t ISO15693_MAX_WRITE_BLOCK_SIZE = 32;
 static constexpr uint8_t MAX_ISO14443A_READ_COMMANDS = 64;
 static constexpr uint8_t PN5180_WRITE_REGISTER_SAFE = 0x00;
 static constexpr uint8_t PN5180_WRITE_REGISTER_OR_MASK_SAFE = 0x01;
@@ -1367,6 +1368,125 @@ void printWriteResult(uint16_t block, const __FlashStringHelper *status, char ke
   Serial.println();
 }
 
+void printIso15693WriteResult(uint16_t block, const __FlashStringHelper *status, ISO15693ErrorCode rc = ISO15693_EC_OK) {
+  Serial.print(F("PND1 WRITE_RESULT block="));
+  Serial.print(block);
+  Serial.print(F(" status="));
+  Serial.print(status);
+  Serial.print(F(" protocol=ISO15693 rc="));
+  Serial.println(static_cast<int>(rc));
+}
+
+bool parseHexBytesTextDynamic(const String &text, uint8_t *buffer, uint8_t expectedBytes) {
+  return parseHexBytesText(text, buffer, expectedBytes);
+}
+
+bool writeIso15693BlockFresh(uint8_t blockAddress, const uint8_t *data, uint8_t blockSize, bool verify, ISO15693ErrorCode &rc) {
+  uint8_t uid[8] = {0};
+  if (!setupRfSafe(0x0D, 0x8D, true, F("ISO15693"))) {
+    rc = ISO15693_EC_UNKNOWN_ERROR;
+    return false;
+  }
+
+  rc = getIso15693InventorySafe(uid);
+  if (rc != ISO15693_EC_OK) {
+    return false;
+  }
+
+  rc = nfc15693.writeSingleBlock(uid, blockAddress, const_cast<uint8_t *>(data), blockSize);
+  if (rc != ISO15693_EC_OK) {
+    return false;
+  }
+
+  if (!verify) {
+    return true;
+  }
+
+  uint8_t verifyData[ISO15693_MAX_WRITE_BLOCK_SIZE] = {0};
+  rc = nfc15693.readSingleBlock(uid, blockAddress, verifyData, blockSize);
+  if (rc != ISO15693_EC_OK) {
+    return false;
+  }
+
+  for (uint8_t i = 0; i < blockSize; ++i) {
+    if (verifyData[i] != data[i]) {
+      rc = ISO15693_EC_UNKNOWN_ERROR;
+      return false;
+    }
+  }
+  return true;
+}
+
+void handleIso15693WriteCommand(const String &line) {
+  int cursor = 0;
+  String prefix = nextCommandToken(line, cursor);
+  String command = nextCommandToken(line, cursor);
+  String blockToken = nextCommandToken(line, cursor);
+  String dataToken = nextCommandToken(line, cursor);
+
+  if (prefix != F("PND1") || command != F("WRITE_ISO15693") || blockToken.length() == 0 || dataToken.length() == 0) {
+    Serial.println(F("PND1 WRITE_RESULT status=bad_command protocol=ISO15693"));
+    return;
+  }
+
+  int blockValue = blockToken.toInt();
+  if (blockValue < 0 || blockValue > 255) {
+    Serial.println(F("PND1 WRITE_RESULT status=bad_block protocol=ISO15693"));
+    return;
+  }
+
+  bool verify = false;
+  while (cursor < static_cast<int>(line.length())) {
+    String option = nextCommandToken(line, cursor);
+    if (option == F("VERIFY")) {
+      verify = true;
+    }
+  }
+
+  uint8_t uid[8] = {0};
+  if (!setupRfSafe(0x0D, 0x8D, true, F("ISO15693"))) {
+    printIso15693WriteResult(static_cast<uint16_t>(blockValue), F("rf_setup_failed"), ISO15693_EC_UNKNOWN_ERROR);
+    return;
+  }
+
+  ISO15693ErrorCode rc = getIso15693InventorySafe(uid);
+  if (rc != ISO15693_EC_OK) {
+    printIso15693WriteResult(static_cast<uint16_t>(blockValue), F("no_card"), rc);
+    return;
+  }
+
+  SystemInfoData info = readSystemInfo(uid);
+  if (info.rc != ISO15693_EC_OK || !info.hasMemorySize || info.blockSize == 0 || info.blockSize > ISO15693_MAX_WRITE_BLOCK_SIZE) {
+    printIso15693WriteResult(static_cast<uint16_t>(blockValue), F("bad_system_info"), info.rc);
+    return;
+  }
+
+  if (blockValue >= info.numBlocks) {
+    printIso15693WriteResult(static_cast<uint16_t>(blockValue), F("bad_block"), ISO15693_EC_BLOCK_NOT_AVAILABLE);
+    return;
+  }
+
+  uint8_t data[ISO15693_MAX_WRITE_BLOCK_SIZE] = {0};
+  if (!parseHexBytesTextDynamic(dataToken, data, info.blockSize)) {
+    printIso15693WriteResult(static_cast<uint16_t>(blockValue), F("bad_data"), ISO15693_EC_UNKNOWN_ERROR);
+    return;
+  }
+
+  for (uint8_t attempt = 0; attempt < 3; ++attempt) {
+    if (writeIso15693BlockFresh(static_cast<uint8_t>(blockValue), data, info.blockSize, verify, rc)) {
+      printIso15693WriteResult(static_cast<uint16_t>(blockValue), F("ok"), rc);
+      return;
+    }
+    delay(10);
+  }
+
+  if (rc == ISO15693_EC_BLOCK_IS_LOCKED || rc == ISO15693_EC_BLOCK_ALREADY_LOCKED) {
+    printIso15693WriteResult(static_cast<uint16_t>(blockValue), F("block_locked"), rc);
+    return;
+  }
+  printIso15693WriteResult(static_cast<uint16_t>(blockValue), F("failed"), rc);
+}
+
 bool writeMifareClassicBlockFresh(
     uint8_t blockAddress,
     uint8_t keyType,
@@ -1705,6 +1825,10 @@ bool processSerialCommand() {
   }
   if (line.startsWith(F("PND1 BRUTE"))) {
     handleMifareBruteCommand(line, false);
+    return true;
+  }
+  if (line.startsWith(F("PND1 WRITE_ISO15693"))) {
+    handleIso15693WriteCommand(line);
     return true;
   }
   if (line.startsWith(F("PND1 WRITE"))) {
